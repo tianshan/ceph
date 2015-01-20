@@ -237,7 +237,7 @@ public:
   class scrub_info_t {
   public:
     /// inodes we contain with dirty scrub stamps
-    map<dentry_key_t,CInode*> dirty_scrub_stamps;
+    map<dentry_key_t,CInode*> dirty_scrub_stamps; // TODO: make use of this!
     struct scrub_stamps {
       version_t version;
       utime_t time;
