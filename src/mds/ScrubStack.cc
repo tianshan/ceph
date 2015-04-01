@@ -138,20 +138,13 @@ void ScrubStack::scrub_dir_dentry(CDentry *dn,
 
 
   if (scrubbing_cdirs.empty()) {
-    frag_t next_frag;
-    int r = in->scrub_dirfrag_next(&next_frag);
-    assert (r >= 0);
-
-    if (r == 0) {
-      // we got a frag to scrub, otherwise it would be ENOENT
-      CDir *next_dir = in->get_or_open_dirfrag(mdcache, next_frag);
-      if (!next_dir->is_complete()) {
-	C_KickOffScrubs *c = new C_KickOffScrubs(this);
-	next_dir->fetch(c);
-	return;
-      }
-      next_dir->scrub_initialize();
-      scrubbing_cdirs.push_back(next_dir);
+    CDir *next_cdir = NULL;
+    bool ready = get_next_cdir(in, &next_cdir);
+    if (ready && next_cdir) {
+      next_cdir->scrub_initialize();
+      scrubbing_cdirs.push_back(next_cdir);
+    } else {
+      return;
     }
   }
 
@@ -170,6 +163,29 @@ void ScrubStack::scrub_dir_dentry(CDentry *dn,
     ++i;
   }
   dout(10) << __func__ << " is exiting" << dendl;
+}
+
+bool ScrubStack::get_next_cdir(CInode *in, CDir **new_dir)
+{
+  frag_t next_frag;
+  int r = in->scrub_dirfrag_next(&next_frag);
+  assert (r >= 0);
+
+  if (r == 0) {
+    // we got a frag to scrub, otherwise it would be ENOENT
+    CDir *next_dir = in->get_or_open_dirfrag(mdcache, next_frag);
+    if (!next_dir->is_complete()) {
+      C_KickOffScrubs *c = new C_KickOffScrubs(this);
+      next_dir->fetch(c);
+      return false;
+    }
+    *new_dir = next_dir;
+    return true;
+  }
+  assert(r == ENOENT);
+  // there are no dirfrags left
+  *new_dir = NULL;
+  return true;
 }
 
 

@@ -135,6 +135,18 @@ private:
   void scrub_dirfrag(CDir *dir, bool *added_children, bool *is_terminal,
 		     bool *done);
 
+  /**
+   * Get a CDir into memory, and return it if it's already complete.
+   * Otherwise, fetch it and kick off scrubbing when done.
+   *
+   * @param in The Inode to get the next directory from
+   * @param new_dir The CDir we're returning to you. NULL if
+   * not ready yet or there aren't any.
+   * @returns false if you have to wait, true if there's no work
+   * left to do (we returned it, or there are none left in this inode).
+   */
+  bool get_next_cdir(CInode *in, CDir **new_dir);
+
   class C_KickOffScrubs : public MDSInternalContext {
     ScrubStack *stack;
   public:
