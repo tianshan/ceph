@@ -134,6 +134,7 @@ void ScrubStack::scrub_dir_dentry(CDentry *dn,
     // turn frags into CDir *
     CDir *dir = in->get_dirfrag(*i);
     scrubbing_cdirs.push_back(dir);
+    dout(25) << "got CDir " << *dir << " presently scrubbing" << dendl;
   }
 
 
@@ -166,6 +167,8 @@ void ScrubStack::scrub_dir_dentry(CDentry *dn,
     all_frags_done = all_frags_done && frag_done;
   }
 frags_finished:
+  dout(20) << "finished looping; all_frags_terminal=" << all_frags_terminal
+           << ", all_frags_done=" << all_frags_done << dendl;
   if (all_frags_done) {
     assert (!*added_children); // can't do this if children are still pending
     scrub_dir_dentry_final(dn, &finally_done);
