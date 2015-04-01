@@ -214,6 +214,15 @@ void ScrubStack::scrub_dir_dentry_final(CDentry *dn, bool *finally_done)
   return;
 }
 
+void ScrubStack::scrub_dirfrag(CDir *dir, bool *added_children,
+                               bool *is_terminal, bool *done)
+{
+  dout(20) << __func__ << " on " << *dir << dendl;
+  *added_children = false;
+  *is_terminal = false;
+  *done = false;
+}
+
 #if 0
 void ScrubStack::kick_off_scrubs()
 {
