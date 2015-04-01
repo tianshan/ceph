@@ -207,7 +207,12 @@ bool ScrubStack::get_next_cdir(CInode *in, CDir **new_dir)
   return true;
 }
 
-
+void ScrubStack::scrub_dir_dentry_final(CDentry *dn, bool *finally_done)
+{
+  dout(20) << __func__ << *dn << dendl;
+  *finally_done =true;
+  return;
+}
 
 #if 0
 void ScrubStack::kick_off_scrubs()
