@@ -167,19 +167,23 @@ void ScrubStack::scrub_dir_dentry(CDentry *dn,
 
 bool ScrubStack::get_next_cdir(CInode *in, CDir **new_dir)
 {
+  dout(20) << __func__ << " on " << *in << dendl;
   frag_t next_frag;
   int r = in->scrub_dirfrag_next(&next_frag);
   assert (r >= 0);
 
   if (r == 0) {
     // we got a frag to scrub, otherwise it would be ENOENT
+    dout(25) << "looking up new frag " << next_frag << dendl;
     CDir *next_dir = in->get_or_open_dirfrag(mdcache, next_frag);
     if (!next_dir->is_complete()) {
       C_KickOffScrubs *c = new C_KickOffScrubs(this);
       next_dir->fetch(c);
+      dout(25) << "fetching frag from RADOS" << dendl;
       return false;
     }
     *new_dir = next_dir;
+    dout(25) << "returning dir " << *new_dir << dendl;
     return true;
   }
   assert(r == ENOENT);
