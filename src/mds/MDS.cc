@@ -41,6 +41,7 @@
 #include "MDBalancer.h"
 #include "Migrator.h"
 
+#include "ScrubStack.h"
 #include "SnapServer.h"
 #include "SnapClient.h"
 
@@ -136,6 +137,8 @@ MDS::MDS(const std::string &n, Messenger *m, MonClient *mc) :
   mdlog = new MDLog(this);
   balancer = new MDBalancer(this);
 
+  scrubstack = new ScrubStack(mdcache);
+
   inotable = new InoTable(this);
   snapserver = new SnapServer(this);
   snapclient = new SnapClient(this);
@@ -169,6 +172,7 @@ MDS::~MDS() {
   delete authorize_handler_service_registry;
   delete authorize_handler_cluster_registry;
 
+  if (scrubstack) { delete scrubstack; scrubstack = NULL; }
   if (mdcache) { delete mdcache; mdcache = NULL; }
   if (mdlog) { delete mdlog; mdlog = NULL; }
   if (balancer) { delete balancer; balancer = NULL; }

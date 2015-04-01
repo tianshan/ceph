@@ -116,6 +116,7 @@ class MDCache;
 class MDLog;
 class MDBalancer;
 class MDSInternalContextBase;
+class ScrubStack;
 
 class CInode;
 class CDir;
@@ -183,6 +184,8 @@ class MDS : public Dispatcher, public md_config_obs_t {
   Locker       *locker;
   MDLog        *mdlog;
   MDBalancer   *balancer;
+
+  ScrubStack   *scrubstack;
 
   InoTable     *inotable;
 
