@@ -137,32 +137,44 @@ void ScrubStack::scrub_dir_dentry(CDentry *dn,
   }
 
 
-  if (scrubbing_cdirs.empty()) {
-    CDir *next_cdir = NULL;
-    bool ready = get_next_cdir(in, &next_cdir);
-    if (ready && next_cdir) {
-      next_cdir->scrub_initialize();
-      scrubbing_cdirs.push_back(next_cdir);
-    } else {
-      return;
-    }
-  }
-
   list<CDir*>::iterator i = scrubbing_cdirs.begin();
   bool all_frags_terminal = true;
   bool all_frags_done = true;
-  while (i != scrubbing_cdirs.end() &&
-      g_conf->mds_max_scrub_ops_in_progress > scrubs_in_progress) {
+  bool finally_done = false;
+  while (g_conf->mds_max_scrub_ops_in_progress > scrubs_in_progress) {
+    // select next CDir
+    CDir *cur_dir = NULL;
+    if (i != scrubbing_cdirs.end()) {
+      cur_dir = *i;
+      ++i;
+    } else {
+      bool ready = get_next_cdir(in, &cur_dir);
+      if (ready && cur_dir) {
+        cur_dir->scrub_initialize();
+        scrubbing_cdirs.push_back(cur_dir);
+      } else {
+        goto frags_finished;
+      }
+    }
+    // scrub that CDir
     bool frag_added_children = false;
     bool frag_terminal = true;
     bool frag_done = false;
-    scrub_dirfrag(*i, &frag_added_children, &frag_terminal, &frag_done);
+    scrub_dirfrag(cur_dir, &frag_added_children, &frag_terminal, &frag_done);
     *added_children |= frag_added_children;
     all_frags_terminal = all_frags_terminal && frag_terminal;
     all_frags_done = all_frags_done && frag_done;
-    ++i;
   }
+frags_finished:
+  if (all_frags_done) {
+    assert (!*added_children); // can't do this if children are still pending
+    scrub_dir_dentry_final(dn, &finally_done);
+  }
+
+  *terminal = all_frags_terminal;
+  *done = all_frags_done && finally_done;
   dout(10) << __func__ << " is exiting" << dendl;
+  return;
 }
 
 bool ScrubStack::get_next_cdir(CInode *in, CDir **new_dir)
