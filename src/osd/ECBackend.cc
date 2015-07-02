@@ -1492,7 +1492,11 @@ ECUtil::HashInfoRef ECBackend::get_hash_info(
       if (r >= 0) {
 	bufferlist::iterator bp = bl.begin();
 	::decode(hinfo, bp);
-	assert(hinfo.get_total_chunk_size() == (uint64_t)st.st_size);
+	if (hinfo.get_total_chunk_size() != (uint64_t)st.st_size) {
+	  dout(0) << __func__ << ": Mismatch of total_chunk_size "
+			       << hinfo.get_total_chunk_size() << dendl;
+	  return ECUtil::HashInfoRef();
+	}
       } else {
 	return ECUtil::HashInfoRef();
       }
