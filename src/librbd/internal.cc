@@ -703,7 +703,7 @@ int invoke_async_request(ImageCtx *ictx, const std::string& request_type,
     ldout(ictx->cct, 20) << "snap_create_helper " << ictx << " " << snap_name
                          << dendl;
 
-    int r = ictx_check(ictx, true);
+    int r = ictx_check(ictx, ictx->owner_lock);
     if (r < 0) {
       return r;
     }
@@ -803,7 +803,7 @@ int invoke_async_request(ImageCtx *ictx, const std::string& request_type,
     ldout(ictx->cct, 20) << "snap_remove_helper " << ictx << " " << snap_name
                          << dendl;
 
-    int r = ictx_check(ictx, true);
+    int r = ictx_check(ictx, ictx->owner_lock);
     if (r < 0) {
       return r;
     }
@@ -2054,7 +2054,7 @@ reprotect_and_return_err:
 		   << size << dendl;
     ictx->snap_lock.put_read();
 
-    int r = ictx_check(ictx, true);
+    int r = ictx_check(ictx, ictx->owner_lock);
     if (r < 0) {
       return r;
     }
@@ -2195,8 +2195,14 @@ reprotect_and_return_err:
     return 0;
   }
 
-  int ictx_check(ImageCtx *ictx, bool owner_locked)
+  int ictx_check(ImageCtx *ictx) {
+    RWLock::RLocker owner_locker(ictx->owner_lock);
+    return ictx_check(ictx, ictx->owner_lock);
+  }
+
+  int ictx_check(ImageCtx *ictx, const RWLock &owner_lock)
   {
+    assert(ictx->owner_lock.is_locked());
     CephContext *cct = ictx->cct;
     ldout(cct, 20) << "ictx_check " << ictx << dendl;
 
@@ -2205,17 +2211,11 @@ reprotect_and_return_err:
     ictx->refresh_lock.Unlock();
 
     if (needs_refresh) {
-      int r;
-      if (owner_locked) {
-        r = ictx_refresh(ictx);
-      } else {
-        RWLock::RLocker owner_lock(ictx->owner_lock);
-        r = ictx_refresh(ictx);
-      }
+      int r = ictx_refresh(ictx);
       if (r < 0) {
 	lderr(cct) << "Error re-reading rbd header: " << cpp_strerror(-r)
 		   << dendl;
-	return r;
+        return r;
       }
     }
     return 0;
@@ -2916,7 +2916,7 @@ reprotect_and_return_err:
 
     int r;
     // ictx_check also updates parent data
-    if ((r = ictx_check(ictx, true)) < 0) {
+    if ((r = ictx_check(ictx, ictx->owner_lock)) < 0) {
       lderr(cct) << "ictx_check failed" << dendl;
       return r;
     }
@@ -3001,7 +3001,7 @@ reprotect_and_return_err:
       return -EINVAL;
     }
 
-    int r = ictx_check(ictx, true);
+    int r = ictx_check(ictx, ictx->owner_lock);
     if (r < 0) {
       return r;
     }
