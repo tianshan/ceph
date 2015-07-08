@@ -54,6 +54,7 @@ release
 stamp-h1
 systemd/ceph-osd@.service
 systemd/Makefile
+systemd/ceph-rgw.tmpfiles.d
 vgcore.*
 
 # specific local dir files
