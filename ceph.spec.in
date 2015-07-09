@@ -10,13 +10,13 @@
 %{!?_selinux_policy_version: %global _selinux_policy_version %(sed -e 's,.*selinux-policy-\\([^/]*\\)/.*,\\1,' /usr/share/selinux/devel/policyhelp 2>/dev/null || echo 0.0.0)}
 
 %define relabel_files() \
-restorecon -R /usr/bin/ceph-mon; \
-restorecon -R /usr/bin/ceph-osd; \
-restorecon -R /usr/bin/ceph-mds; \
-restorecon -R /etc/rc\.d/init\.d/ceph; \
-restorecon -R /var/run/ceph; \
-restorecon -R /var/lib/ceph; \
-restorecon -R /var/log/ceph;
+restorecon -R /usr/bin/ceph-mon > /dev/null 2>&1; \
+restorecon -R /usr/bin/ceph-osd > /dev/null 2>&1; \
+restorecon -R /usr/bin/ceph-mds > /dev/null 2>&1; \
+restorecon -R /etc/rc\.d/init\.d/ceph > /dev/null 2>&1; \
+restorecon -R /var/run/ceph > /dev/null 2>&1; \
+restorecon -R /var/lib/ceph > /dev/null 2>&1; \
+restorecon -R /var/log/ceph > /dev/null 2>&1;
 
 %endif
 
