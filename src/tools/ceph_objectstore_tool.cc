@@ -40,8 +40,6 @@
 namespace po = boost::program_options;
 using namespace std;
 
-static coll_t META_COLL("meta");
-
 #ifdef INTERNAL_TEST
 CompatSet get_test_compat_set() {
   CompatSet::FeatureSet ceph_osd_feature_compat;
@@ -99,22 +97,24 @@ int _action_on_all_objects_in_pg(ObjectStore *store, coll_t coll, action_on_obje
 	 ++obj) {
       if (obj->is_pgmeta())
 	continue;
-      bufferlist attr;
-      r = store->getattr(coll, *obj, OI_ATTR, attr);
-      if (r < 0) {
-	cerr << "Error getting attr on : " << make_pair(coll, *obj) << ", "
-	     << cpp_strerror(r) << std::endl;
-	return r;
-      }
       object_info_t oi;
-      bufferlist::iterator bp = attr.begin();
-      try {
-	::decode(oi, bp);
-      } catch (...) {
-	r = -EINVAL;
-	cerr << "Error getting attr on : " << make_pair(coll, *obj) << ", "
-	     << cpp_strerror(r) << std::endl;
-	return r;
+      if (coll != coll_t::meta()) {
+        bufferlist attr;
+        r = store->getattr(coll, *obj, OI_ATTR, attr);
+        if (r < 0) {
+	  cerr << "Error getting attr on : " << make_pair(coll, *obj) << ", "
+	       << cpp_strerror(r) << std::endl;
+	  return r;
+        }
+        bufferlist::iterator bp = attr.begin();
+        try {
+	  ::decode(oi, bp);
+        } catch (...) {
+	  r = -EINVAL;
+	  cerr << "Error getting attr on : " << make_pair(coll, *obj) << ", "
+	       << cpp_strerror(r) << std::endl;
+	  return r;
+        }
       }
       r = action.call(store, coll, *obj, oi);
       if (r < 0)
@@ -142,10 +142,7 @@ int action_on_all_objects_in_pg(ObjectStore *store, string pgidstr, action_on_ob
        i != candidates.end();
        ++i) {
     spg_t cand_pgid;
-    snapid_t snap;
-    if (!i->is_pg(cand_pgid, snap))
-      continue;
-    if (snap != CEPH_NOSNAP)
+    if (!i->is_pg(&cand_pgid))
       continue;
 
     // If an exact match or treat no shard as any shard
@@ -192,9 +189,7 @@ int _action_on_all_objects(ObjectStore *store, action_on_object_t &action, bool 
   for (vector<coll_t>::iterator i = candidates.begin();
        i != candidates.end();
        ++i) {
-    spg_t pgid;
-    snapid_t snap;
-    if (i->is_pg(pgid, snap)) {
+    if (i->is_pg()) {
       colls_to_check.push_back(*i);
     }
   }
@@ -234,24 +229,27 @@ struct pgid_object_list {
     for (list<pair<coll_t, ghobject_t> >::const_iterator i = _objects.begin();
 	 i != _objects.end();
 	 ++i) {
-      if (i != _objects.begin() && human_readable) {
-        f->flush(cout);
-        cout << std::endl;
-      }
       f->open_array_section("pgid_object");
-      string pgid = i->first.c_str();
-      std::size_t pos = pgid.find("_");
-      if (pos == string::npos)
-        f->dump_string("pgid", pgid);
-      else
-        f->dump_string("pgid", pgid.substr(0, pos));
+      spg_t pgid;
+      bool is_pg = i->first.is_pg(&pgid);
+      if (is_pg)
+        f->dump_string("pgid", stringify(pgid));
+      if (!is_pg || !human_readable)
+        f->dump_string("coll", i->first.to_str());
       f->open_object_section("ghobject");
       i->second.dump(f);
       f->close_section();
       f->close_section();
+      if (human_readable) {
+        f->flush(cout);
+        cout << std::endl;
+      }
     }
-    if (!human_readable)
+    if (!human_readable) {
       f->close_section();
+      f->flush(cout);
+      cout << std::endl;
+    }
   }
 };
 
@@ -282,9 +280,9 @@ struct lookup_ghobject : public action_on_object_t {
   }
 };
 
-hobject_t infos_oid = OSD::make_infos_oid();
+ghobject_t infos_oid = OSD::make_infos_oid();
 ghobject_t log_oid;
-hobject_t biginfo_oid;
+ghobject_t biginfo_oid;
 
 int file_fd = fd_none;
 bool debug = false;
@@ -356,7 +354,7 @@ int get_log(ObjectStore *fs, __u8 struct_ver,
     ostringstream oss;
     assert(struct_ver > 0);
     PGLog::read_log(fs, coll,
-		    struct_ver >= 8 ? coll : META_COLL,
+		    struct_ver >= 8 ? coll : coll_t::meta(),
 		    struct_ver >= 8 ? pgid.make_pgmeta_oid() : log_oid,
 		    info, divergent_priors, log, missing, oss);
     if (debug && oss.str().size())
@@ -400,7 +398,7 @@ void dump_log(Formatter *formatter, ostream &out, pg_log_t &log,
 void remove_coll(ObjectStore *store, const coll_t &coll)
 {
   spg_t pg;
-  coll.is_pg_prefix(pg);
+  coll.is_pg_prefix(&pg);
   OSDriver driver(
     store,
     coll_t(),
@@ -460,19 +458,11 @@ int finish_remove_pgs(ObjectStore *store)
        ++it) {
     spg_t pgid;
 
-    if (it->is_temp(pgid)) {
-      cout << "finish_remove_pgs " << *it << " clearing temp" << std::endl;
-      OSD::recursive_remove_collection(store, *it);
-      continue;
-    }
-
-    uint64_t seq;
-    snapid_t snap;
-    if (it->is_removal(&seq, &pgid) || (it->is_pg(pgid, snap) &&
-	PG::_has_removal_flag(store, pgid))) {
-      cout << "finish_remove_pgs removing " << *it
-	   << " pgid is " << pgid << std::endl;
-      remove_coll(store, *it);
+    if (it->is_temp(&pgid) ||
+	it->is_removal(&pgid) ||
+	(it->is_pg(&pgid) && PG::_has_removal_flag(store, pgid))) {
+      cout << "finish_remove_pgs " << *it << " removing " << pgid << std::endl;
+      OSD::recursive_remove_collection(store, pgid, *it);
       continue;
     }
 
@@ -506,10 +496,10 @@ int mark_pg_for_removal(ObjectStore *fs, spg_t pgid, ObjectStore::Transaction *t
     bufferlist one;
     one.append('1');
     t->collection_setattr(coll, "remove", one);
-    cout << "remove " << META_COLL << " " << log_oid.hobj.oid << std::endl;
-    t->remove(META_COLL, log_oid);
-    cout << "remove " << META_COLL << " " << biginfo_oid.oid << std::endl;
-    t->remove(META_COLL, biginfo_oid);
+    cout << "remove " << coll_t::meta() << " " << log_oid << std::endl;
+    t->remove(coll_t::meta(), log_oid);
+    cout << "remove " << coll_t::meta() << " " << biginfo_oid << std::endl;
+    t->remove(coll_t::meta(), biginfo_oid);
   } else {
     // new omap key
     cout << "setting '_remove' omap key" << std::endl;
@@ -717,7 +707,8 @@ int ObjectStoreTool::export_files(ObjectStore *store, coll_t coll)
     for (vector<ghobject_t>::iterator i = objects.begin();
 	 i != objects.end();
 	 ++i) {
-      if (i->is_pgmeta()) {
+      assert(!i->hobj.is_meta());
+      if (i->is_pgmeta() || i->hobj.is_temp()) {
 	continue;
       }
       r = export_file(store, coll, *i);
@@ -731,7 +722,7 @@ int ObjectStoreTool::export_files(ObjectStore *store, coll_t coll)
 int get_osdmap(ObjectStore *store, epoch_t e, OSDMap &osdmap, bufferlist& bl)
 {
   bool found = store->read(
-      META_COLL, OSD::get_osdmap_pobject_name(e), 0, 0, bl) >= 0;
+      coll_t::meta(), OSD::get_osdmap_pobject_name(e), 0, 0, bl) >= 0;
   if (!found) {
     cerr << "Can't find OSDMap for pg epoch " << e << std::endl;
     return -ENOENT;
@@ -887,9 +878,13 @@ int ObjectStoreTool::get_object(ObjectStore *store, coll_t coll,
     coll_t(),
     OSD::make_snapmapper_oid());
   spg_t pg;
-  coll.is_pg_prefix(pg);
+  coll.is_pg_prefix(&pg);
   SnapMapper mapper(&driver, 0, 0, 0, pg.shard);
 
+  if (ob.hoid.hobj.is_temp()) {
+    cerr << "ERROR: Export contains temporary object '" << ob.hoid << "'" << std::endl;
+    return -EFAULT;
+  }
   assert(g_ceph_context);
   if (ob.hoid.hobj.nspace != g_ceph_context->_conf->osd_hit_set_namespace) {
     object_t oid = ob.hoid.hobj.oid;
@@ -898,8 +893,7 @@ int ObjectStoreTool::get_object(ObjectStore *store, coll_t coll,
     pg_t pgid = curmap.raw_pg_to_pg(raw_pgid);
   
     spg_t coll_pgid;
-    snapid_t coll_snap;
-    if (coll.is_pg(coll_pgid, coll_snap) == false) {
+    if (coll.is_pg(&coll_pgid) == false) {
       cerr << "INTERNAL ERROR: Bad collection during import" << std::endl;
       return -EFAULT;
     }
@@ -1115,6 +1109,12 @@ void filter_divergent_priors(spg_t import_pgid, const OSDMap &curmap,
 
   for (divergent_priors_t::const_iterator i = in.begin();
        i != in.end(); ++i) {
+
+    // Reject divergent priors for temporary objects
+    if (i->second.is_temp()) {
+      reject.insert(*i);
+      continue;
+    }
 
     if (i->second.nspace != hit_set_namespace) {
       object_t oid = i->second.oid;
@@ -1388,14 +1388,25 @@ int do_list(ObjectStore *store, string pgidstr, string object, Formatter *format
     return r;
   lookup.dump(formatter, human_readable);
   formatter->flush(cout);
-  cout << std::endl;
+  return 0;
+}
+
+int do_meta(ObjectStore *store, string object, Formatter *formatter, bool debug, bool human_readable)
+{
+  int r;
+  lookup_ghobject lookup(object);
+  r = action_on_all_objects_in_exact_pg(store, coll_t::meta(), lookup, debug);
+  if (r)
+    return r;
+  lookup.dump(formatter, human_readable);
+  formatter->flush(cout);
   return 0;
 }
 
 int do_remove_object(ObjectStore *store, coll_t coll, ghobject_t &ghobj)
 {
   spg_t pg;
-  coll.is_pg_prefix(pg);
+  coll.is_pg_prefix(&pg);
   OSDriver driver(
     store,
     coll_t(),
@@ -1839,9 +1850,9 @@ int main(int argc, char **argv)
     ("journal-path", po::value<string>(&jpath),
      "path to journal, mandatory for filestore type")
     ("pgid", po::value<string>(&pgidstr),
-     "PG id, mandatory except for import, fix-lost, list-pgs, set-allow-sharded-objects, dump-journal, dump-super")
+     "PG id, mandatory for info, log, remove, export, rm-past-intervals")
     ("op", po::value<string>(&op),
-     "Arg is one of [info, log, remove, export, import, list, fix-lost, list-pgs, rm-past-intervals, set-allow-sharded-objects, dump-journal, dump-super]")
+     "Arg is one of [info, log, remove, export, import, list, fix-lost, list-pgs, rm-past-intervals, set-allow-sharded-objects, dump-journal, dump-super, meta-list]")
     ("file", po::value<string>(&file),
      "path of file to export or import")
     ("format", po::value<string>(&format)->default_value("json-pretty"),
@@ -1930,18 +1941,18 @@ int main(int argc, char **argv)
     usage(desc);
     myexit(1);
   }
-  if (op != "list" && vm.count("object") && !vm.count("objcmd")) {
-    cerr << "Invalid syntax, missing command" << std::endl;
-    usage(desc);
-    myexit(1);
-  }
-  if (!vm.count("op") && !(vm.count("object") && vm.count("objcmd"))) {
+  if (!vm.count("op") && !vm.count("object")) {
     cerr << "Must provide --op or object command..." << std::endl;
     usage(desc);
     myexit(1);
   }
   if (op != "list" && vm.count("op") && vm.count("object")) {
     cerr << "Can't specify both --op and object command syntax" << std::endl;
+    usage(desc);
+    myexit(1);
+  }
+  if (op != "list" && vm.count("object") && !vm.count("objcmd")) {
+    cerr << "Invalid syntax, missing command" << std::endl;
     usage(desc);
     myexit(1);
   }
@@ -1997,7 +2008,7 @@ int main(int argc, char **argv)
   // Special list handling.  Treating pretty_format as human readable,
   // with one object per line and not an enclosing array.
   human_readable = ends_with(format, "-pretty");
-  if (op == "list" && human_readable) {
+  if ((op == "list" || op == "meta-list") && human_readable) {
     // Remove -pretty from end of format which we know is there
     format = format.substr(0, format.size() - strlen("-pretty"));
   }
@@ -2085,7 +2096,7 @@ int main(int argc, char **argv)
   bufferlist bl;
   OSDSuperblock superblock;
   bufferlist::iterator p;
-  ret = fs->read(META_COLL, OSD_SUPERBLOCK_POBJECT, 0, 0, bl);
+  ret = fs->read(coll_t::meta(), OSD_SUPERBLOCK_POBJECT, 0, 0, bl);
   if (ret < 0) {
     cerr << "Failure to read OSD superblock: " << cpp_strerror(ret) << std::endl;
     goto out;
@@ -2133,10 +2144,10 @@ int main(int argc, char **argv)
 	  if (lookup.size() != 1) {
 	    stringstream ss;
 	    if (lookup.size() == 0)
-	      ss << objcmd << ": " << cpp_strerror(ENOENT);
+	      ss << "No object id '" << object << "' found";
 	    else
-	      ss << "expected a single object named '" << object
-		 << "' but got " << lookup.size() << " instead";
+	      ss << "Found " << lookup.size() << " objects with id '" << object
+		 << "', please use a JSON spec from --op list instead";
 	    throw std::runtime_error(ss.str());
 	  }
 	  pair<coll_t, ghobject_t> found = lookup.pop();
@@ -2162,19 +2173,23 @@ int main(int argc, char **argv)
 	    throw std::runtime_error(ss.str());
 	  }
 	  string object_pgidstr = i->get_str();
-	  spg_t object_pgid;
-	  object_pgid.parse(object_pgidstr.c_str());
-	  if (pgidstr.length() > 0) {
-	    if (object_pgid != pgid) {
-	      ss << "object '" << object
-		 << "' has a pgid different from the --pgid="
-		 << pgidstr << " option";
-	      throw std::runtime_error(ss.str());
+          if (object_pgidstr != "meta") {
+	    spg_t object_pgid;
+	    object_pgid.parse(object_pgidstr.c_str());
+	    if (pgidstr.length() > 0) {
+	      if (object_pgid != pgid) {
+	        ss << "object '" << object
+		   << "' has a pgid different from the --pgid="
+		   << pgidstr << " option";
+	        throw std::runtime_error(ss.str());
+	      }
+	    } else {
+	      pgidstr = object_pgidstr;
+	      pgid = object_pgid;
 	    }
-	  } else {
-	    pgidstr = object_pgidstr;
-	    pgid = object_pgid;
-	  }
+          } else {
+            pgidstr = object_pgidstr;
+          }
 	  ++i;
 	  v = *i;
 	}
@@ -2184,7 +2199,7 @@ int main(int argc, char **argv)
 	  ss << "Decode object json error: " << e.what();
 	  throw std::runtime_error(ss.str());
 	}
-        if ((uint64_t)pgid.pgid.m_pool != (uint64_t)ghobj.hobj.pool) {
+        if (pgidstr != "meta" && (uint64_t)pgid.pgid.m_pool != (uint64_t)ghobj.hobj.pool) {
           cerr << "Object pool and pgid pool don't match" << std::endl;
           ret = 1;
           goto out;
@@ -2198,14 +2213,10 @@ int main(int argc, char **argv)
     }
   }
 
-  // The ops which don't require --pgid option are checked here and
-  // mentioned in the usage for --pgid with some exceptions.
-  // The dump-journal op isn't here because it is handled earlier.
-  // The dump-journal-mount op is undocumented so not in the usage.
-  if (op != "list" && op != "import" && op != "fix-lost"
-      && op != "list-pgs"  && op != "set-allow-sharded-objects"
-      && op != "dump-journal-mount" && op != "dump-super"
-      && (pgidstr.length() == 0)) {
+  // The ops which require --pgid option are checked here and
+  // mentioned in the usage for --pgid.
+  if ((op == "info" || op == "log" || op == "remove" || op == "export"
+      || op == "rm-past-intervals") && pgidstr.length() == 0) {
     cerr << "Must provide pgid" << std::endl;
     usage(desc);
     ret = 1;
@@ -2271,7 +2282,7 @@ int main(int argc, char **argv)
       ObjectStore::Transaction t;
       bl.clear();
       ::encode(superblock, bl);
-      t.write(META_COLL, OSD_SUPERBLOCK_POBJECT, 0, bl.length(), bl);
+      t.write(coll_t::meta(), OSD_SUPERBLOCK_POBJECT, 0, bl.length(), bl);
       ret = fs->apply_transaction(t);
       if (ret < 0) {
         cerr << "Error writing OSD superblock: " << cpp_strerror(ret) << std::endl;
@@ -2363,6 +2374,23 @@ int main(int argc, char **argv)
     goto out;
   }
 
+  if (op == "dump-super") {
+    formatter->open_object_section("superblock");
+    superblock.dump(formatter);
+    formatter->close_section();
+    formatter->flush(cout);
+    cout << std::endl;
+    goto out;
+  }
+
+  if (op == "meta-list") {
+    ret = do_meta(fs, object, formatter, debug, human_readable);
+    if (ret < 0) {
+      cerr << "do_meta failed: " << cpp_strerror(ret) << std::endl;
+    }
+    goto out;
+  }
+
   ret = fs->list_collections(ls);
   if (ret < 0) {
     cerr << "failed to list pgs: " << cpp_strerror(ret) << std::endl;
@@ -2374,24 +2402,24 @@ int main(int argc, char **argv)
 
   // Find pg
   for (it = ls.begin(); it != ls.end(); ++it) {
-    snapid_t snap;
     spg_t tmppgid;
 
-    if (!it->is_pg(tmppgid, snap)) {
+    if (pgidstr == "meta") {
+      if (it->to_str() == "meta")
+        break;
+      else
+        continue;
+    }
+
+    if (!it->is_pg(&tmppgid)) {
       continue;
     }
 
-    if (it->is_temp(tmppgid)) {
+    if (it->is_temp(&tmppgid)) {
       continue;
     }
 
     if (op != "list-pgs" && tmppgid != pgid) {
-      continue;
-    }
-    if (snap != CEPH_NOSNAP) {
-      if (debug)
-        cerr << "skipping snapped dir " << *it
-	       << " (pg " << pgid << " snap " << snap << ")" << std::endl;
       continue;
     }
 
@@ -2408,6 +2436,15 @@ int main(int argc, char **argv)
     goto out;
   }
 
+  // If not an object command nor any of the ops handled below, then output this usage
+  // before complaining about a bad pgid
+  if (!vm.count("objcmd") && op != "export" && op != "info" && op != "log" && op != "rm-past-intervals") {
+    cerr << "Must provide --op (info, log, remove, export, import, list, fix-lost, list-pgs, rm-past-intervals, set-allow-sharded-objects, dump-journal, dump-super, meta-list)"
+	 << std::endl;
+    usage(desc);
+    ret = 1;
+    goto out;
+  }
   epoch_t map_epoch;
 // The following code for export, info, log require omap or !skip-mount-omap
   if (it != ls.end()) {
@@ -2659,17 +2696,8 @@ int main(int argc, char **argv)
         fs->apply_transaction(*t);
         cout << "Removal succeeded" << std::endl;
       }
-    } else if (op == "dump-super") {
-      formatter->open_object_section("superblock");
-      superblock.dump(formatter);
-      formatter->close_section();
-      formatter->flush(cout);
-      cout << std::endl;
     } else {
-      cerr << "Must provide --op (info, log, remove, export, import, list, fix-lost, list-pgs, rm-past-intervals)"
-	<< std::endl;
-      usage(desc);
-      ret = 1;
+      assert(!"Should have already checked for valid --op");
     }
   } else {
     cerr << "PG '" << pgid << "' not found" << std::endl;

@@ -152,12 +152,14 @@ void OpTracker::unregister_inflight_op(TrackedOp *i)
 
 bool OpTracker::check_ops_in_flight(std::vector<string> &warning_vector)
 {
+  if (!tracking_enabled)
+    return false;
+
   utime_t now = ceph_clock_now(cct);
   utime_t too_old = now;
   too_old -= complaint_time;
-  utime_t oldest_op;
+  utime_t oldest_op = now;
   uint64_t total_ops_in_flight = 0;
-  bool got_first_op = false;
 
   for (uint32_t i = 0; i < num_optracker_shards; i++) {
     ShardedTrackingData* sdata = sharded_in_flight_list[i];
@@ -165,10 +167,7 @@ bool OpTracker::check_ops_in_flight(std::vector<string> &warning_vector)
     Mutex::Locker locker(sdata->ops_in_flight_lock_sharded);
     if (!sdata->ops_in_flight_sharded.empty()) {
       utime_t oldest_op_tmp = sdata->ops_in_flight_sharded.front()->get_initiated();
-      if (!got_first_op) {
-        oldest_op = oldest_op_tmp;
-        got_first_op = true;
-      } else if (oldest_op_tmp < oldest_op) {
+      if (oldest_op_tmp < oldest_op) {
         oldest_op = oldest_op_tmp;
       }
     } 
@@ -191,7 +190,8 @@ bool OpTracker::check_ops_in_flight(std::vector<string> &warning_vector)
 
   int slow = 0;     // total slow
   int warned = 0;   // total logged
-  for (uint32_t iter = 0; iter < num_optracker_shards; iter++) {
+  for (uint32_t iter = 0;
+       iter < num_optracker_shards && warned < log_threshold; iter++) {
     ShardedTrackingData* sdata = sharded_in_flight_list[iter];
     assert(NULL != sdata);
     Mutex::Locker locker(sdata->ops_in_flight_lock_sharded);
@@ -294,12 +294,12 @@ void OpTracker::_mark_event(TrackedOp *op, const string &evt,
 }
 
 void OpTracker::RemoveOnDelete::operator()(TrackedOp *op) {
-  op->mark_event("done");
   if (!tracker->tracking_enabled) {
     op->_unregistered();
     delete op;
     return;
   }
+  op->mark_event("done");
   tracker->unregister_inflight_op(op);
   // Do not delete op, unregister_inflight_op took control
 }

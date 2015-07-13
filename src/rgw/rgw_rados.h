@@ -1295,6 +1295,8 @@ public:
   map<string, RGWRESTConn *> zone_conn_map;
   map<string, RGWRESTConn *> region_conn_map;
 
+  RGWZoneParams& get_zone_params() { return zone; }
+
   RGWMetadataManager *meta_mgr;
 
   RGWDataChangesLog *data_log;
@@ -1598,6 +1600,38 @@ public:
       Delete(RGWRados::Object *_target) : target(_target) {}
 
       int delete_obj();
+    };
+
+    struct Stat {
+      RGWRados::Object *source;
+
+      struct Result {
+        rgw_obj obj;
+        RGWObjManifest manifest;
+        bool has_manifest;
+        uint64_t size;
+        time_t mtime;
+        map<string, bufferlist> attrs;
+
+        Result() : has_manifest(false), size(0), mtime(0) {}
+      } result;
+
+      struct State {
+        librados::IoCtx io_ctx;
+        librados::AioCompletion *completion;
+        int ret;
+
+        State() : completion(NULL), ret(0) {}
+      } state;
+
+
+      Stat(RGWRados::Object *_source) : source(_source) {}
+
+      int stat_async();
+      int wait();
+      int stat();
+    private:
+      int finish();
     };
   };
 
@@ -2044,7 +2078,12 @@ public:
                          map<RGWObjCategory, RGWStorageStats> *calculated_stats);
   int bucket_rebuild_index(rgw_bucket& bucket);
   int remove_objs_from_index(rgw_bucket& bucket, list<rgw_obj_key>& oid_list);
+  int move_rados_obj(librados::IoCtx& src_ioctx,
+		     const string& src_oid, const string& src_locator,
+	             librados::IoCtx& dst_ioctx,
+		     const string& dst_oid, const string& dst_locator);
   int fix_head_obj_locator(rgw_bucket& bucket, bool copy_obj, bool remove_bad, rgw_obj_key& key);
+  int fix_tail_obj_locator(rgw_bucket& bucket, rgw_obj_key& key, bool fix, bool *need_fix);
 
   int cls_user_get_header(const string& user_id, cls_user_header *header);
   int cls_user_get_header_async(const string& user_id, RGWGetUserHeader_CB *ctx);
@@ -2083,6 +2122,8 @@ public:
   bool need_to_log_metadata() {
     return zone_public_config.log_meta;
   }
+
+  librados::Rados* get_rados_handle();
 
  private:
   /**
@@ -2156,8 +2197,6 @@ public:
 
   uint64_t instance_id();
   uint64_t next_bucket_id();
-
-  librados::Rados* get_rados_handle();
 };
 
 class RGWStoreManager {

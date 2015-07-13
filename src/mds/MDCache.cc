@@ -685,11 +685,16 @@ void MDCache::populate_mydir()
     for (list<frag_t>::iterator p = ls.begin(); p != ls.end(); ++p) {
       frag_t fg = *p;
       CDir *dir = strays[i]->get_dirfrag(fg);
-      if (!dir)
+      if (!dir) {
 	dir = strays[i]->get_or_open_dirfrag(this, fg);
-      if (dir->get_version() == 0) {
-	dir->fetch(new C_MDS_RetryOpenRoot(this));
-	return;
+      }
+
+      if (dir->state_test(CDir::STATE_BADFRAG)) {
+        mds->damaged();
+        assert(0);
+      } else if (dir->get_version() == 0) {
+        dir->fetch(new C_MDS_RetryOpenRoot(this));
+        return;
       }
     }
   }
@@ -7174,7 +7179,6 @@ void MDCache::check_memory_usage()
 	   << ", malloc " << last.malloc << " mmap " << last.mmap
 	   << ", baseline " << baseline.get_heap()
 	   << ", buffers " << (buffer::get_total_alloc() >> 10)
-	   << ", max " << g_conf->mds_mem_max
 	   << ", " << num_inodes_with_caps << " / " << inode_map.size() << " inodes have caps"
 	   << ", " << num_caps << " caps, " << caps_per_inode << " caps per inode"
 	   << dendl;
@@ -7183,13 +7187,6 @@ void MDCache::check_memory_usage()
   mds->mlogger->set(l_mdm_heap, last.get_heap());
   mds->mlogger->set(l_mdm_malloc, last.malloc);
 
-  /*int size = last.get_total();
-  if (size > g_conf->mds_mem_max * .9) {
-    float ratio = (float)g_conf->mds_mem_max * .9 / (float)size;
-    if (ratio < 1.0)
-      mds->server->recall_client_state(ratio);
-  } else 
-    */
   if (num_inodes_with_caps > g_conf->mds_cache_size) {
     float ratio = (float)g_conf->mds_cache_size * .9 / (float)num_inodes_with_caps;
     if (ratio < 1.0)
