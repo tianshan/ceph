@@ -4647,7 +4647,8 @@ bool FileStore::collection_empty(coll_t c)
   tracepoint(objectstore, collection_empty_exit, ret);
   return ret;
 }
-int FileStore::collection_list(coll_t c, ghobject_t start, ghobject_t end, int max,
+int FileStore::collection_list(coll_t c, ghobject_t start, ghobject_t end,
+			       bool sort_bitwise, int max,
 			       vector<ghobject_t> *ls, ghobject_t *next)
 {
   if (start.is_max())
@@ -4687,7 +4688,7 @@ int FileStore::collection_list(coll_t c, ghobject_t start, ghobject_t end, int m
     if (start < sep) {
       dout(10) << __func__ << " first checking temp pool" << dendl;
       coll_t temp = c.get_temp();
-      int r = collection_list(temp, start, end, max, ls, next);
+      int r = collection_list(temp, start, end, sort_bitwise, max, ls, next);
       if (r < 0)
 	return r;
       if (*next != ghobject_t::get_max())
@@ -4708,7 +4709,7 @@ int FileStore::collection_list(coll_t c, ghobject_t start, ghobject_t end, int m
   assert(NULL != index.index);
   RWLock::RLocker l((index.index)->access_lock);
 
-  r = index->collection_list_partial(start, end, max, ls, next);
+  r = index->collection_list_partial(start, end, sort_bitwise, max, ls, next);
 
   if (r < 0) {
     assert(!m_filestore_fail_eio || r != -EIO);
