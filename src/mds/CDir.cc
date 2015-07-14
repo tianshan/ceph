@@ -2883,6 +2883,10 @@ void CDir::scrub_initialize()
 {
   dout(20) << __func__ << dendl;
   assert(is_complete());
+
+  // FIXME: weird implicit construction, is someone else meant
+  // to be calling scrub_info_create first?
+  scrub_info();
   assert(scrub_infop && !scrub_infop->directory_scrubbing);
 
   scrub_infop->recursive_start.version = get_projected_version();

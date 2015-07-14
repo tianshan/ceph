@@ -4032,6 +4032,8 @@ void CInode::scrub_initialize(version_t scrub_version)
 {
   dout(20) << __func__ << " with scrub_version "
            << scrub_version << dendl;
+  assert(!scrub_infop || !scrub_infop->scrub_in_progress);
+  scrub_info();
   if (!scrub_infop)
     scrub_infop = new scrub_info_t();
   else
@@ -4073,6 +4075,7 @@ int CInode::scrub_dirfrag_next(frag_t* out_dirfrag)
       dout(20) << " return frag " << *out_dirfrag << dendl;
       return 0;
     }
+    ++i;
   }
 
   dout(20) << " no frags left, ENOENT " << dendl;
@@ -4081,6 +4084,9 @@ int CInode::scrub_dirfrag_next(frag_t* out_dirfrag)
 
 void CInode::scrub_dirfrags_scrubbing(list<frag_t>* out_dirfrags)
 {
+  assert(out_dirfrags != NULL);
+  assert(scrub_infop != NULL);
+
   out_dirfrags->clear();
   std::map<frag_t, scrub_stamp_info_t>::iterator i =
       scrub_infop->dirfrag_stamps.begin();
@@ -4092,6 +4098,8 @@ void CInode::scrub_dirfrags_scrubbing(list<frag_t>* out_dirfrags)
     } else {
       return;
     }
+
+    ++i;
   }
 }
 

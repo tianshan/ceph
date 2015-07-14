@@ -24,18 +24,31 @@
 
 class MDCache;
 
+/**
+ * Externally input parameters for a scrub, associated with the root
+ * of where we are doing a recursive scrub
+ */
+class ScrubHeader {
+public:
+  std::string tag;
+  CDentry *origin;
+};
+
 class ScrubStack {
   /// The stack of dentries we want to scrub
   elist<CDentry*> dentry_stack;
   /// current number of dentries we're actually scrubbing
   int scrubs_in_progress;
   ScrubStack *scrubstack; // hack for dout
+  int stack_size;
 public:
   MDCache *mdcache;
   ScrubStack(MDCache *mdc) :
     dentry_stack(member_offset(CDentry, item_scrub)),
     scrubs_in_progress(0),
-    scrubstack(this), mdcache(mdc) {}
+    scrubstack(this),
+    stack_size(0),
+    mdcache(mdc) {}
   ~ScrubStack() {
     assert(dentry_stack.empty());
     assert(!scrubs_in_progress);
@@ -50,17 +63,20 @@ public:
    * @param children True if we want to scrub the direct children of
    * dn but aren't doing a recursive scrub. (Otherwise, all checks are
    * local to dn's disk state.)
+   * @param tag If non-empty, tag applied to each verified rados object
    */
   void enqueue_dentry_top(CDentry *dn, bool recursive, bool children,
+                          const std::string &tag,
                           MDSInternalContextBase *on_finish) {
-    enqueue_dentry(dn, recursive, children, on_finish, true);
+    enqueue_dentry(dn, recursive, children, tag, on_finish, true);
   }
   /** Like enqueue_dentry_top, but we wait for all pending scrubs before
    * starting this one.
    */
   void enqueue_dentry_bottom(CDentry *dn, bool recursive, bool children,
+                             const std::string &tag,
                              MDSInternalContextBase *on_finish) {
-    enqueue_dentry(dn, recursive, children, on_finish, false);
+    enqueue_dentry(dn, recursive, children, tag, on_finish, false);
   }
 
 private:
@@ -69,8 +85,10 @@ private:
    * the given scrub params, and then try and kick off more scrubbing.
    */
   void enqueue_dentry(CDentry *dn, bool recursive, bool children,
+                      const std::string &tag,
                       MDSInternalContextBase *on_finish, bool top);
   void _enqueue_dentry(CDentry *dn, bool recursive, bool children,
+                      const std::string &tag,
                        MDSInternalContextBase *on_finish, bool top);
   /**
    * Kick off as many scrubs as are appropriate, based on the current
@@ -159,8 +177,13 @@ private:
   class C_KickOffScrubs : public MDSInternalContext {
     ScrubStack *stack;
   public:
-    C_KickOffScrubs(ScrubStack *s);
-    void finish(int r);
+    C_KickOffScrubs(MDS *mds, ScrubStack *s)
+      : MDSInternalContext(mds), stack(s)
+    {
+    }
+    void finish(int r){
+      stack->kick_off_scrubs();
+    }
   };
 };
 

@@ -385,6 +385,7 @@ private:
   void clean_up_admin_socket();
   void check_ops_in_flight(); // send off any slow ops to monitor
   void command_scrub_path(Formatter *f, const string& path);
+  void command_tag_path(Formatter *f, const string& path);
   void command_flush_path(Formatter *f, const string& path);
   void command_flush_journal(Formatter *f);
   void command_get_subtrees(Formatter *f);

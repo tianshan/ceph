@@ -621,6 +621,7 @@ public:
     num_projected_xattrs(0),
     num_projected_srnodes(0),
     stickydir_ref(0),
+    scrub_infop(NULL),
     parent(0),
     inode_auth(CDIR_AUTH_DEFAULT),
     replica_caps_wanted(0),

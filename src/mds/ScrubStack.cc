@@ -30,6 +30,9 @@ void ScrubStack::push_dentry(CDentry *dentry)
 {
   dout(20) << "pushing " << *dentry << " on top of ScrubStack" << dendl;
   dentry->get(CDentry::PIN_SCRUBQUEUE);
+  if (!dentry->item_scrub.is_on_list()) {
+    stack_size++;
+  }
   dentry_stack.push_front(&dentry->item_scrub);
 }
 
@@ -37,6 +40,9 @@ void ScrubStack::push_dentry_bottom(CDentry *dentry)
 {
   dout(20) << "pushing " << *dentry << " on bottom of ScrubStack" << dendl;
   dentry->get(CDentry::PIN_SCRUBQUEUE);
+  if (!dentry->item_scrub.is_on_list()) {
+    stack_size++;
+  }
   dentry_stack.push_back(&dentry->item_scrub);
 }
 
@@ -44,12 +50,14 @@ void ScrubStack::pop_dentry(CDentry *dn)
 {
   dout(20) << "popping " << *dn
           << " off of ScrubStack" << dendl;
-  assert(!dn->item_scrub.is_on_list());
+  assert(dn->item_scrub.is_on_list());
   dn->put(CDentry::PIN_SCRUBQUEUE);
   dn->item_scrub.remove_myself();
+  stack_size--;
 }
 
 void ScrubStack::_enqueue_dentry(CDentry *dn, bool recursive, bool children,
+                                const std::string &tag,
                                  MDSInternalContextBase *on_finish, bool top)
 {
   dout(10) << __func__ << " with {" << *dn << "}"
@@ -63,19 +71,25 @@ void ScrubStack::_enqueue_dentry(CDentry *dn, bool recursive, bool children,
     push_dentry_bottom(dn);
 }
 void ScrubStack::enqueue_dentry(CDentry *dn, bool recursive, bool children,
+                                const std::string &tag,
                                  MDSInternalContextBase *on_finish, bool top)
 {
-  _enqueue_dentry(dn, recursive, children, on_finish, top);
+  _enqueue_dentry(dn, recursive, children, tag, on_finish, top);
   kick_off_scrubs();
 }
 
 void ScrubStack::kick_off_scrubs()
 {
+  dout(20) << __func__ << " entering with " << scrubs_in_progress << " in "
+              "progress and " << stack_size << " in the stack" << dendl;
   bool can_continue = true;
   elist<CDentry*>::iterator i = dentry_stack.begin();
   while (g_conf->mds_max_scrub_ops_in_progress > scrubs_in_progress &&
       can_continue && !i.end()) {
     CDentry *cur = *i;
+
+    dout(20) << __func__ << " examining dentry " << *cur << dendl;
+
     CInode *curi = cur->get_projected_inode();
     ++i; // we have our reference, push iterator forward
 
@@ -113,6 +127,7 @@ void ScrubStack::scrub_dir_dentry(CDentry *dn,
                                   bool *terminal,
                                   bool *done)
 {
+  assert(dn != NULL);
   dout(10) << __func__ << *dn << dendl;
 
   if (!dn->scrub_info()->scrub_children &&
@@ -125,9 +140,24 @@ void ScrubStack::scrub_dir_dentry(CDentry *dn,
   *done = false;
 
   CInode *in = dn->get_projected_inode();
+  // FIXME: greg -- is get_version the appropriate version?  (i.e. is scrub_version
+  // meant to be an actual version that we're scrubbing, or something else?)
+  if (!in->scrub_info()->scrub_in_progress) {
+    // We may come through here more than once on our way up and down
+    // the stack... or actually is that right?  Should we perhaps
+    // only see ourselves once on the way down and once on the way
+    // back up again, and not do this?
+
+    // Hmm, bigger problem, we can only actually 
+
+    in->scrub_initialize(in->get_version());
+  }
+
   list<frag_t> scrubbing_frags;
   list<CDir*> scrubbing_cdirs;
   in->scrub_dirfrags_scrubbing(&scrubbing_frags);
+  dout(20) << __func__ << " iterating over " << scrubbing_frags.size()
+    << " scrubbing frags" << dendl;
   for (list<frag_t>::iterator i = scrubbing_frags.begin();
       i != scrubbing_frags.end();
       ++i) {
@@ -137,6 +167,9 @@ void ScrubStack::scrub_dir_dentry(CDentry *dn,
     dout(25) << "got CDir " << *dir << " presently scrubbing" << dendl;
   }
 
+
+  dout(20) << __func__ << " consuming from " << scrubbing_cdirs.size()
+    << " scrubbing cdirs" << dendl;
 
   list<CDir*>::iterator i = scrubbing_cdirs.begin();
   bool all_frags_terminal = true;
@@ -148,13 +181,16 @@ void ScrubStack::scrub_dir_dentry(CDentry *dn,
     if (i != scrubbing_cdirs.end()) {
       cur_dir = *i;
       ++i;
+      dout(20) << __func__ << " got cur_dir = " << *cur_dir << dendl;
     } else {
       bool ready = get_next_cdir(in, &cur_dir);
+      dout(20) << __func__ << " get_next_cdir ready=" << ready << dendl;
       if (ready && cur_dir) {
         cur_dir->scrub_initialize();
         scrubbing_cdirs.push_back(cur_dir);
       } else {
-        goto frags_finished;
+        // Finished with all frags
+        break;
       }
     }
     // scrub that CDir
@@ -166,7 +202,7 @@ void ScrubStack::scrub_dir_dentry(CDentry *dn,
     all_frags_terminal = all_frags_terminal && frag_terminal;
     all_frags_done = all_frags_done && frag_done;
   }
-frags_finished:
+
   dout(20) << "finished looping; all_frags_terminal=" << all_frags_terminal
            << ", all_frags_done=" << all_frags_done << dendl;
   if (all_frags_done) {
@@ -192,7 +228,7 @@ bool ScrubStack::get_next_cdir(CInode *in, CDir **new_dir)
     dout(25) << "looking up new frag " << next_frag << dendl;
     CDir *next_dir = in->get_or_open_dirfrag(mdcache, next_frag);
     if (!next_dir->is_complete()) {
-      C_KickOffScrubs *c = new C_KickOffScrubs(this);
+      C_KickOffScrubs *c = new C_KickOffScrubs(mdcache->mds, this);
       next_dir->fetch(c);
       dout(25) << "fetching frag from RADOS" << dendl;
       return false;
@@ -211,6 +247,15 @@ void ScrubStack::scrub_dir_dentry_final(CDentry *dn, bool *finally_done)
 {
   dout(20) << __func__ << *dn << dendl;
   *finally_done =true;
+  // FIXME: greg -- is this the right lifetime from the inode's scrub_info?
+  CInode *in = dn->get_projected_inode();
+  Context *fin = NULL;
+  in->scrub_finished(&fin);
+  if (fin) {
+    // FIXME: pass some error code in?
+    // // Cannot scrub same dentry twice at same time
+    fin->complete(0);
+  }
   return;
 }
 
@@ -221,6 +266,38 @@ void ScrubStack::scrub_dirfrag(CDir *dir, bool *added_children,
   *added_children = false;
   *is_terminal = false;
   *done = false;
+
+  for (CDir::map_t::iterator i = dir->begin(); i != dir->end(); ++ i) {
+    CDentry *dn = i->second;
+
+    if (
+        dn->scrub_info()->dentry_scrubbing
+      ||  dir->scrub_info()->directories_scrubbed.count(i->first)
+      || dir->scrub_info()->others_scrubbed.count(i->first)) {
+      dout(20) << __func__ << " skipping already scrubbing or scrubbed " << *dn << dendl;
+      continue;
+    }
+
+    C_KickOffScrubs *c = new C_KickOffScrubs(mdcache->mds, this);
+
+    _enqueue_dentry(dn,
+        /*
+         * FIXME: look up params from dir's inode's parent
+         */
+#if 0
+        dir->scrub_info()->scrub_recursive,
+        dir->scrub_info()->scrub_children,
+#else
+        true,
+        true,
+#endif
+        // FIXME: carry tag through
+        "foobar",
+        c,
+        true);
+
+    *added_children = true;
+  }
 }
 
 #if 0
@@ -261,6 +338,11 @@ void ScrubStack::kick_off_scrubs()
 
   dout(10) << __func__ << " is exiting" << dendl;
 }
-
-
 #endif
+
+void ScrubStack::scrub_file_dentry(CDentry *dn)
+{
+  // No-op:
+  // TODO: hook into validate_disk_state
+}
+
