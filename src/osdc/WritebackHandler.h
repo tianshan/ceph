@@ -32,11 +32,14 @@ class WritebackHandler {
 			   uint64_t off, uint64_t len, const SnapContext& snapc,
 			   const bufferlist &bl, utime_t mtime,
 			   uint64_t trunc_size, __u32 trunc_seq,
-			   Context *oncommit) = 0;
+                           ceph_tid_t journal_tid, Context *oncommit) = 0;
   virtual ceph_tid_t lock(const object_t& oid, const object_locator_t& oloc,
 			  int op, int flags, Context *onack, Context *oncommit) {
     assert(0 == "this WritebackHandler does not support the lock operation");
   }
+
+  virtual void overwrite_extent(const object_t& oid, uint64_t off, uint64_t len,
+                                ceph_tid_t journal_tid) {}
 
   virtual void get_client_lock() {}
   virtual void put_client_lock() {}
