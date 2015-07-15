@@ -339,7 +339,9 @@ bool MDS::asok_command(string command, cmdmap_t& cmdmap, string format,
     } else if (command == "tag path") {
       string path;
       cmd_getval(g_ceph_context, cmdmap, "path", path);
-      command_tag_path(f, path);
+      string tag;
+      cmd_getval(g_ceph_context, cmdmap, "tag", tag);
+      command_tag_path(f, path, tag);
     } else if (command == "flush_path") {
       string path;
       cmd_getval(g_ceph_context, cmdmap, "path", path);
@@ -404,12 +406,13 @@ void MDS::command_scrub_path(Formatter *f, const string& path)
 }
 
 
-void MDS::command_tag_path(Formatter *f, const string& path)
+void MDS::command_tag_path(Formatter *f,
+                           const string& path, const std::string &tag)
 {
   C_SaferCond scond;
   {
     Mutex::Locker l(mds_lock);
-    mdcache->enqueue_scrub(path, f, &scond);
+    mdcache->enqueue_scrub(path, tag, f, &scond);
   }
   scond.wait();
 }
@@ -797,7 +800,8 @@ void MDS::set_up_admin_socket()
                                      "scrub an inode and output results");
   assert(r == 0);
   r = admin_socket->register_command("tag path",
-                                     "tag path name=path,type=CephString",
+                                     "tag path name=path,type=CephString"
+                                     " name=tag,type=CephString",
                                      asok_hook,
                                      "WIP apply scrub tag recursively");
   assert(r == 0);
