@@ -4124,6 +4124,10 @@ void CInode::scrub_finished(Context **c) {
       scrub_infop->dirfrag_stamps.begin();
       i != scrub_infop->dirfrag_stamps.end();
       ++i) {
+    if(i->second.last_scrub_version != i->second.scrub_start_version) {
+      derr << i->second.last_scrub_version << " != "
+        << i->second.scrub_start_version << dendl;
+    }
     assert(i->second.last_scrub_version == i->second.scrub_start_version);
   }
   scrub_infop->last_scrub_version = scrub_infop->scrub_start_version;

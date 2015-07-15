@@ -137,7 +137,7 @@ MDS::MDS(const std::string &n, Messenger *m, MonClient *mc) :
   mdlog = new MDLog(this);
   balancer = new MDBalancer(this);
 
-  scrubstack = new ScrubStack(mdcache);
+  scrubstack = new ScrubStack(mdcache, &finisher);
 
   inotable = new InoTable(this);
   snapserver = new SnapServer(this);

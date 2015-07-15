@@ -23,6 +23,7 @@
 #include "include/elist.h"
 
 class MDCache;
+class Finisher;
 
 /**
  * Externally input parameters for a scrub, associated with the root
@@ -35,6 +36,10 @@ public:
 };
 
 class ScrubStack {
+  protected:
+  /// A finisher needed so that we don't re-enter kick_off_scrubs
+  Finisher *finisher;
+
   /// The stack of dentries we want to scrub
   elist<CDentry*> dentry_stack;
   /// current number of dentries we're actually scrubbing
@@ -43,7 +48,8 @@ class ScrubStack {
   int stack_size;
 public:
   MDCache *mdcache;
-  ScrubStack(MDCache *mdc) :
+  ScrubStack(MDCache *mdc, Finisher *finisher_) :
+    finisher(finisher_),
     dentry_stack(member_offset(CDentry, item_scrub)),
     scrubs_in_progress(0),
     scrubstack(this),
@@ -87,7 +93,7 @@ private:
   void enqueue_dentry(CDentry *dn, bool recursive, bool children,
                       const std::string &tag,
                       MDSInternalContextBase *on_finish, bool top);
-  void _enqueue_dentry(CDentry *dn, bool recursive, bool children,
+  void _enqueue_dentry(CDentry *dn, CDir *parent, bool recursive, bool children,
                       const std::string &tag,
                        MDSInternalContextBase *on_finish, bool top);
   /**

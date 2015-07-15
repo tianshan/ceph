@@ -644,8 +644,9 @@ void CDentry::scrub_finished(Context **c)
   dout(10) << __func__ << dendl;
   assert(scrub_info()->dentry_scrubbing);
 
-  if (scrub_infop->scrub_parent)
+  if (scrub_infop->scrub_parent) {
     scrub_infop->scrub_parent->scrub_dentry_finished(this);
+  }
 
   *c = scrub_infop->on_finish;
 

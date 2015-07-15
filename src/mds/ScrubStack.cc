@@ -15,6 +15,7 @@
 #include <iostream>
 
 #include "ScrubStack.h"
+#include "common/Finisher.h"
 #include "mds/MDS.h"
 #include "mds/MDCache.h"
 #include "mds/MDSContinuation.h"
@@ -56,15 +57,15 @@ void ScrubStack::pop_dentry(CDentry *dn)
   stack_size--;
 }
 
-void ScrubStack::_enqueue_dentry(CDentry *dn, bool recursive, bool children,
-                                const std::string &tag,
-                                 MDSInternalContextBase *on_finish, bool top)
+void ScrubStack::_enqueue_dentry(CDentry *dn, CDir *parent, bool recursive,
+    bool children, const std::string &tag,
+    MDSInternalContextBase *on_finish, bool top)
 {
   dout(10) << __func__ << " with {" << *dn << "}"
            << ", recursive=" << recursive << ", children=" << children
            << ", on_finish=" << on_finish << ", top=" << top << dendl;
   assert(mdcache->mds->mds_lock.is_locked_by_me());
-  dn->scrub_initialize(NULL, recursive, children, on_finish);
+  dn->scrub_initialize(parent, recursive, children, on_finish);
   if (top)
     push_dentry(dn);
   else
@@ -74,7 +75,7 @@ void ScrubStack::enqueue_dentry(CDentry *dn, bool recursive, bool children,
                                 const std::string &tag,
                                  MDSInternalContextBase *on_finish, bool top)
 {
-  _enqueue_dentry(dn, recursive, children, tag, on_finish, top);
+  _enqueue_dentry(dn, NULL, recursive, children, tag, on_finish, top);
   kick_off_scrubs();
 }
 
@@ -111,10 +112,14 @@ void ScrubStack::kick_off_scrubs()
       bool progress; // it added new dentries to the top of the stack
       scrub_dir_dentry(cur, &progress, &terminal, &completed);
       if (completed) {
+        dout(20) << __func__ << " dir completed" << dendl;
         pop_dentry(cur);
       } else if (progress) {
+        dout(20) << __func__ << " dir progressed" << dendl;
         // we added new stuff to top of stack, so reset ourselves there
         i = dentry_stack.begin();
+      } else {
+        dout(20) << __func__ << " dir no-op" << dendl;
       }
 
       can_continue = progress || terminal || completed;
@@ -164,7 +169,7 @@ void ScrubStack::scrub_dir_dentry(CDentry *dn,
     // turn frags into CDir *
     CDir *dir = in->get_dirfrag(*i);
     scrubbing_cdirs.push_back(dir);
-    dout(25) << "got CDir " << *dir << " presently scrubbing" << dendl;
+    dout(25) << __func__ << " got CDir " << *dir << " presently scrubbing" << dendl;
   }
 
 
@@ -185,9 +190,17 @@ void ScrubStack::scrub_dir_dentry(CDentry *dn,
     } else {
       bool ready = get_next_cdir(in, &cur_dir);
       dout(20) << __func__ << " get_next_cdir ready=" << ready << dendl;
-      if (ready && cur_dir) {
+      if (cur_dir) {
         cur_dir->scrub_initialize();
+      }
+
+      if (ready && cur_dir) {
         scrubbing_cdirs.push_back(cur_dir);
+      } else if (!ready) {
+        // We are waiting for load of a frag
+        all_frags_done = false;
+        all_frags_terminal = false;
+        break;
       } else {
         // Finished with all frags
         break;
@@ -198,6 +211,11 @@ void ScrubStack::scrub_dir_dentry(CDentry *dn,
     bool frag_terminal = true;
     bool frag_done = false;
     scrub_dirfrag(cur_dir, &frag_added_children, &frag_terminal, &frag_done);
+    if (frag_done) {
+      // FIXME is this right?  Can we end up hitting this more than
+      // once and is that a problem?
+      cur_dir->inode->scrub_dirfrag_finished(cur_dir->frag);
+    }
     *added_children |= frag_added_children;
     all_frags_terminal = all_frags_terminal && frag_terminal;
     all_frags_done = all_frags_done && frag_done;
@@ -212,7 +230,7 @@ void ScrubStack::scrub_dir_dentry(CDentry *dn,
 
   *terminal = all_frags_terminal;
   *done = all_frags_done && finally_done;
-  dout(10) << __func__ << " is exiting" << dendl;
+  dout(10) << __func__ << " is exiting " << *terminal << " " << *done << dendl;
   return;
 }
 
@@ -249,12 +267,12 @@ void ScrubStack::scrub_dir_dentry_final(CDentry *dn, bool *finally_done)
   *finally_done =true;
   // FIXME: greg -- is this the right lifetime from the inode's scrub_info?
   CInode *in = dn->get_projected_inode();
+
   Context *fin = NULL;
   in->scrub_finished(&fin);
   if (fin) {
     // FIXME: pass some error code in?
-    // // Cannot scrub same dentry twice at same time
-    fin->complete(0);
+    finisher->queue(new MDSIOContextWrapper(mdcache->mds, fin), 0);
   }
   return;
 }
@@ -262,16 +280,109 @@ void ScrubStack::scrub_dir_dentry_final(CDentry *dn, bool *finally_done)
 void ScrubStack::scrub_dirfrag(CDir *dir, bool *added_children,
                                bool *is_terminal, bool *done)
 {
+  assert(dir != NULL);
+
   dout(20) << __func__ << " on " << *dir << dendl;
   *added_children = false;
   *is_terminal = false;
   *done = false;
 
+  // XXX HACK get the frag complete before calling
+  // scrub intiialize
+  if (!dir->is_complete()) {
+    dir->fetch(new C_KickOffScrubs(mdcache->mds, this));
+    return;
+  }
+
+  if (!dir->scrub_info()->directory_scrubbing) {
+    // FIXME: greg - the CDir API seems inconsistent here, as
+    // scrub_initialize wants the dir to be complete before
+    // we start, but scrub_dentry_next handles incompleteness
+    // via its EAGAIN path.
+    dir->scrub_initialize();
+  }
+
+  int r = 0;
+  while(r == 0) {
+    MDSInternalContext *kick = new C_KickOffScrubs(mdcache->mds, this);
+    CDentry *dn = NULL;
+    r = dir->scrub_dentry_next(kick, &dn);
+    if (r != EAGAIN) {
+      // ctx only used by scrub_dentry_next in EAGAIN case
+      // FIXME It's kind of annoying to keep allocating and deleting a ctx here
+      delete kick;
+    }
+
+    if (r == EAGAIN) {
+      // Drop out, CDir fetcher will call back our kicker context
+      return;
+    }
+
+    if (r == ENOENT) {
+      // Nothing left to scrub, are we done?
+      std::list<CDentry*> scrubbing;
+      dir->scrub_dentries_scrubbing(&scrubbing);
+      if (scrubbing.empty()) {
+        // FIXME: greg: What's the diff meant to be between done and terminal
+        *done = true;
+        *is_terminal = true;
+        continue;
+      } else {
+        return;
+      }
+    }
+
+    if (r < 0) {
+      // FIXME: how can I handle an error here?  I can't hold someone up
+      // forever, but I can't say "sure you're scrubbed"
+      //  -- should change scrub_dentry_next definition to never
+      //  give out IO errors (handle them some other way)
+      //     
+      derr << __func__ << " error from scrub_dentry_next: "
+           << r << dendl;
+      return;
+    }
+
+    // scrub_dentry_next defined to only give -ve, EAGAIN, ENOENT, 0 -- we should
+    // never get random IO errors here.
+    assert(r == 0);
+
+    // FIXME: Do I *really* need to construct a kick context for every
+    // single dentry I'm going to scrub?
+    MDSInternalContext *on_d_scrub = new C_KickOffScrubs(mdcache->mds, this);
+    _enqueue_dentry(dn,
+        dir,
+        /*
+         * FIXME: look up params from dir's inode's parent
+         */
+#if 0
+        dir->scrub_info()->scrub_recursive,
+        dir->scrub_info()->scrub_children,
+#else
+        true,
+        true,
+#endif
+        // FIXME: carry tag through
+        "foobar",
+        on_d_scrub,
+        true);
+
+    *added_children = true;
+  }
+
+#if 0
+  bool any_unscrubbed = false;
+
   for (CDir::map_t::iterator i = dir->begin(); i != dir->end(); ++ i) {
     CDentry *dn = i->second;
 
-    if (
-        dn->scrub_info()->dentry_scrubbing
+    if (dir->scrub_info()->directories_scrubbed.count(i->first) == 0
+        && dir->scrub_info()->others_scrubbed.count(i->first) == 0) {
+      dout(20) << __func__ << " dn not yet scrubbed: " << *dn << dendl;
+      any_unscrubbed = true;
+    }
+
+    if (dn->scrub_info()->dentry_scrubbing
       ||  dir->scrub_info()->directories_scrubbed.count(i->first)
       || dir->scrub_info()->others_scrubbed.count(i->first)) {
       dout(20) << __func__ << " skipping already scrubbing or scrubbed " << *dn << dendl;
@@ -281,6 +392,7 @@ void ScrubStack::scrub_dirfrag(CDir *dir, bool *added_children,
     C_KickOffScrubs *c = new C_KickOffScrubs(mdcache->mds, this);
 
     _enqueue_dentry(dn,
+        dir,
         /*
          * FIXME: look up params from dir's inode's parent
          */
@@ -298,6 +410,9 @@ void ScrubStack::scrub_dirfrag(CDir *dir, bool *added_children,
 
     *added_children = true;
   }
+
+  *done = !any_unscrubbed;
+#endif
 }
 
 #if 0
@@ -344,5 +459,11 @@ void ScrubStack::scrub_file_dentry(CDentry *dn)
 {
   // No-op:
   // TODO: hook into validate_disk_state
+  Context *c = NULL;
+  dn->scrub_finished(&c);
+  if (c) {
+    // FIXME: pass some error code in?
+    finisher->queue(new MDSIOContextWrapper(mdcache->mds, c), 0);
+  }
 }
 

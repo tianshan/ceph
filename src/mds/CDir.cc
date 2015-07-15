@@ -2982,6 +2982,8 @@ int CDir::scrub_dentry_next(MDSInternalContext *cb, CDentry **dnout)
   int rval = _next_dentry_on_set(scrub_infop->directories_to_scrub, true,
                                  cb, dnout);
   if (rval == 0) {
+    dout(20) << __func__ << " inserted to directories scrubbing: "
+      << *dnout << dendl;
     scrub_infop->directories_scrubbing.insert((*dnout)->key());
   } else if (rval < 0 || rval == EAGAIN) {
     // we don't need to do anything else
@@ -2991,6 +2993,11 @@ int CDir::scrub_dentry_next(MDSInternalContext *cb, CDentry **dnout)
              << dendl;
     
     rval = _next_dentry_on_set(scrub_infop->others_to_scrub, false, cb, dnout);
+    if (rval == 0) {
+      dout(20) << __func__ << " inserted to others scrubbing: "
+        << *dnout << dendl;
+      scrub_infop->others_scrubbing.insert((*dnout)->key());
+    }
   }
   dout(20) << " returning " << rval << " with dn=" << *dnout << dendl;
   return rval;
@@ -3029,7 +3036,7 @@ void CDir::scrub_dentry_finished(CDentry *dn)
   } else {
     assert(scrub_infop->others_scrubbing.count(dn_key));
     scrub_infop->others_scrubbing.erase(dn_key);
-    scrub_infop->others_to_scrub.insert(dn_key);
+    scrub_infop->others_scrubbed.insert(dn_key);
   }
 }
 
