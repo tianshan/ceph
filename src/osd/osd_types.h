@@ -95,6 +95,24 @@ WRITE_EQ_OPERATORS_2(pg_shard_t, osd, shard)
 WRITE_CMP_OPERATORS_2(pg_shard_t, osd, shard)
 ostream &operator<<(ostream &lhs, const pg_shard_t &rhs);
 
+class IsPGRecoverablePredicate {
+public:
+  /**
+   * have encodes the shards available
+   */
+  virtual bool operator()(const set<pg_shard_t> &have) const = 0;
+  virtual ~IsPGRecoverablePredicate() {}
+};
+
+class IsPGReadablePredicate {
+public:
+  /**
+   * have encodes the shards available
+   */
+  virtual bool operator()(const set<pg_shard_t> &have) const = 0;
+  virtual ~IsPGReadablePredicate() {}
+};
+
 inline ostream& operator<<(ostream& out, const osd_reqid_t& r) {
   return out << r.name << "." << r.inc << ":" << r.tid;
 }
@@ -242,7 +260,8 @@ enum {
   CEPH_OSD_RMW_FLAG_PGOP        = (1 << 5),
   CEPH_OSD_RMW_FLAG_CACHE       = (1 << 6),
   CEPH_OSD_RMW_FLAG_FORCE_PROMOTE   = (1 << 7),
-  CEPH_OSD_RMW_FLAG_SKIP_PROMOTE    = (1 << 8),
+  CEPH_OSD_RMW_FLAG_SKIP_HANDLE_CACHE = (1 << 8),
+  CEPH_OSD_RMW_FLAG_SKIP_PROMOTE      = (1 << 9),
 };
 
 
@@ -943,6 +962,9 @@ struct pg_pool_t {
     return 0;
   }
 
+  /// converts the acting/up vector to a set of pg shards
+  void convert_to_pg_shards(const vector<int> &from, set<pg_shard_t>* to) const;
+
   typedef enum {
     CACHEMODE_NONE = 0,                  ///< no caching
     CACHEMODE_WRITEBACK = 1,             ///< write to cache, flush later
@@ -1080,7 +1102,8 @@ public:
   HitSet::Params hit_set_params; ///< The HitSet params to use on this pool
   uint32_t hit_set_period;      ///< periodicity of HitSet segments (seconds)
   uint32_t hit_set_count;       ///< number of periods to retain
-  uint32_t min_read_recency_for_promote;   ///< minimum number of HitSet to check before promote
+  uint32_t min_read_recency_for_promote;   ///< minimum number of HitSet to check before promote on read
+  uint32_t min_write_recency_for_promote;  ///< minimum number of HitSet to check before promote on write
 
   uint32_t stripe_width;        ///< erasure coded stripe size in bytes
 
@@ -1110,6 +1133,7 @@ public:
       hit_set_period(0),
       hit_set_count(0),
       min_read_recency_for_promote(0),
+      min_write_recency_for_promote(0),
       stripe_width(0),
       expected_num_objects(0)
   { }
@@ -1650,10 +1674,15 @@ WRITE_CLASS_ENCODER_FEATURES(pool_stat_t)
 struct pg_hit_set_info_t {
   utime_t begin, end;   ///< time interval
   eversion_t version;   ///< version this HitSet object was written
-
-  pg_hit_set_info_t() {}
+  // TODO: remove me in Infernalis.
+  // for upgrading from pre-Hammer and old Hammer releases,
+  // see ReplicatedPG::get_hit_set_{current,archive}_object().
+  bool using_gmt;
+  pg_hit_set_info_t()
+    : using_gmt(true) {}
   pg_hit_set_info_t(utime_t b)
-    : begin(b) {}
+    : begin(b),
+      using_gmt(true) {}
 
   void encode(bufferlist &bl) const;
   void decode(bufferlist::iterator &bl);
@@ -1960,6 +1989,7 @@ struct pg_interval_t {
     ceph::shared_ptr<const OSDMap> osdmap,  ///< [in] current map
     ceph::shared_ptr<const OSDMap> lastmap, ///< [in] last map
     pg_t pgid,                                  ///< [in] pgid for pg
+    IsPGRecoverablePredicate *could_have_gone_active, /// [in] predicate whether the pg can be active
     map<epoch_t, pg_interval_t> *past_intervals,///< [out] intervals
     ostream *out = 0                            ///< [out] debug ostream
     );
