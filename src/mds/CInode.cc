@@ -3681,6 +3681,37 @@ void CInode::validate_disk_state(CInode::validated_data *results,
       delete shadow_in;
     }
 
+    /**
+     * Fetch backtrace and set tag if tag is non-empty
+     */
+    void fetch_backtrace_and_tag(CInode *in, std::string tag,
+                                 Context *fin, bufferlist *bt)
+    {
+      int64_t pool;
+      if (in->is_dir())
+        pool = in->mdcache->mds->mdsmap->get_metadata_pool();
+      else
+        pool = in->inode.layout.fl_pg_pool;
+
+      object_t oid = CInode::get_object_name(in->ino(), frag_t(), "");
+
+      ObjectOperation fetch;
+      fetch.getxattr("parent", bt, NULL);
+      if (!tag.empty()) {
+        bufferlist tag_bl;
+        ::encode(tag, tag_bl);
+        fetch.setxattr("scrub_tag", tag_bl);
+      }
+      if (tag.empty()) {
+        in->mdcache->mds->objecter->read(oid, object_locator_t(pool), fetch, CEPH_NOSNAP,
+            NULL, 0, fin);
+      } else {
+        SnapContext snapc;
+        in->mdcache->mds->objecter->mutate(oid, object_locator_t(pool), fetch, snapc,
+            ceph_clock_now(g_ceph_context), 0, NULL, fin);
+      }
+    }
+
     bool _start(int rval) {
       if (in->is_dirty()) {
         MDCache *mdcache = in->mdcache;
@@ -3699,7 +3730,11 @@ void CInode::validate_disk_state(CInode::validated_data *results,
       C_OnFinisher *conf = new C_OnFinisher(get_io_callback(BACKTRACE),
                                             &in->mdcache->mds->finisher);
 
-      in->fetch_backtrace(conf, &bl);
+      // Rather than using the usual CInode::fetch_backtrace,
+      // use a special variant that optionally writes a tag in the same
+      // operation.
+      const std::string &tag = in->get_parent_dn()->scrub_info()->header->tag;
+      fetch_backtrace_and_tag(in, tag, conf, &bl);
       return false;
     }
 
@@ -3718,9 +3753,10 @@ void CInode::validate_disk_state(CInode::validated_data *results,
       try {
         bufferlist::iterator p = bl.begin();
         ::decode(results->backtrace.ondisk_value, p);
-      } catch (buffer::malformed_input&) {
+      } catch (buffer::error&) {
         results->backtrace.passed = false;
-        results->backtrace.error_str << "failed to decode on-disk backtrace!";
+        results->backtrace.error_str << "failed to decode on-disk backtrace ("
+                                     << bl.length() << " bytes)!";
         return true;
       }
       int64_t pool;
