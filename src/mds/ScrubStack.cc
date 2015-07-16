@@ -366,54 +366,47 @@ void ScrubStack::scrub_dirfrag(CDir *dir, bool *added_children,
   }
 }
 
-#if 0
-void ScrubStack::kick_off_scrubs()
+class C_InodeValidated : public MDSInternalContext
 {
-  dout(10) << __func__ << dendl;
-  assert(mdcache->mds->mds_lock.is_locked_by_me());
+  public:
+    ScrubStack *stack;
+    CInode::validated_data result;
+    CDentry *target;
 
-  bool can_continue = true;
-  while (g_conf->mds_max_scrub_ops_in_progress > scrubs_in_progress &&
-      can_continue &&
-      !dentry_stack.empty()) {
-    CDentry *top = peek_dentry();
-    CInode *topi = top->get_projected_inode();
-    if (!topi->is_dir()) {
-      // okay, we've got a regular inode, a symlink, or a hardlink
-      pop_dentry(); // we only touch it this once, so remove it from the stack
+    C_InodeValidated(MDS *mds, ScrubStack *stack_, CDentry *target_)
+      : MDSInternalContext(mds), stack(stack_), target(target_)
+    {}
 
-      if (topi->is_file()) {
-        scrub_file_dentry(top);
-        can_continue = true;
-      } else {
-        // drat, we don't do anything with these yet :(
-        dout(5) << "skipping scrub on non-dir, non-file dentry " << *top
-                << dendl;
-      }
-    } else {
-      bool completed; // it's done, so pop it off the top of the stack
-      bool terminal; // not done, but we can start ops on other directories
-      bool progress; // it added new dentries to the top of the stack
-      scrub_dir_dentry(top, &progress, &terminal, &completed);
-      if (completed) {
-        pop_dentry();
-      }
-      can_continue = progress || completed;
+    void finish(int r)
+    {
+      stack->_scrub_file_dentry_done(target, r, result);
     }
-  }
-
-  dout(10) << __func__ << " is exiting" << dendl;
-}
-#endif
+};
 
 void ScrubStack::scrub_file_dentry(CDentry *dn)
 {
-  // No-op:
-  // TODO: hook into validate_disk_state
+  assert(dn->get_linkage()->get_inode() != NULL);
+
+  CInode *in = dn->get_linkage()->get_inode();
+  C_InodeValidated *fin = new C_InodeValidated(mdcache->mds, this, dn);
+
+  // At this stage the DN is already past scrub_initialize, so
+  // it's in the cache, it has PIN_SCRUBQUEUE and it is authpinned
+  MDRequestRef null_mdr;
+  in->validate_disk_state(&fin->result, null_mdr, fin);
+}
+
+void ScrubStack::_scrub_file_dentry_done(CDentry *dn, int r,
+    const CInode::validated_data &result)
+{
+  // FIXME: do something real with result!  DamageTable!  Spamming
+  // the cluster log for debugging purposes
+  LogChannelRef clog = mdcache->mds->clog;
+  clog->info() << " scrubbed file dentry " << dn->name << " r=" << r;
+
   Context *c = NULL;
   dn->scrub_finished(&c);
   if (c) {
-    // FIXME: pass some error code in?
     finisher->queue(new MDSIOContextWrapper(mdcache->mds, c), 0);
   }
 }
