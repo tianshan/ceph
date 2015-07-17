@@ -538,6 +538,32 @@ bool PGLSPlainFilter::filter(const std::string &obj_name,
   return true;
 }
 
+bool PGLSCephFSFilter::filter(const std::string &obj_name,
+                             bufferlist& xattr_data, bufferlist& outdata)
+{
+  const std::string need_ending = ".00000000";
+
+  if (obj_name.length() < need_ending.length()) {
+    return false;
+  }
+
+  const bool match = obj_name.compare (obj_name.length() - need_ending.length(), need_ending.length(), need_ending) == 0;
+  if (!match) {
+    return false;
+  }
+
+  if (!scrub_tag.empty()) {
+    std::string tag_ondisk;
+    bufferlist::iterator q = xattr_data.begin();
+    ::decode(tag_ondisk, q);
+    if (tag_ondisk != scrub_tag) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
 bool ReplicatedPG::pgls_filter(PGLSFilter *filter, hobject_t& sobj, bufferlist& outdata)
 {
   bufferlist bl;
@@ -570,6 +596,8 @@ int ReplicatedPG::get_pgls_filter(bufferlist::iterator& iter, PGLSFilter **pfilt
 
   if (type.compare("parent") == 0) {
     filter = new PGLSParentFilter(iter);
+  } else if (type.compare("cephfs") == 0) {
+    filter = new PGLSCephFSFilter(iter);
   } else if (type.compare("plain") == 0) {
     filter = new PGLSPlainFilter(iter);
   } else {

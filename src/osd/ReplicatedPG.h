@@ -1,4 +1,5 @@
 // -*- mode:C++; tab-width:8; c-basic-offset:2; indent-tabs-mode:t -*- 
+// vim: ts=8 sw=2 smarttab
 /*
  * Ceph - scalable distributed file system
  *
@@ -89,6 +90,29 @@ public:
     generic_dout(0) << "parent_ino=" << parent_ino << dendl;
   }
   virtual ~PGLSParentFilter() {}
+  virtual bool filter(const std::string &obj_name, bufferlist& xattr_data,
+                      bufferlist& outdata);
+};
+
+// I want to select objects that have a name ending 00000000
+// and an xattr (scrub_tag) not equal to a specific value.
+// This is so special case that we can't really pretend it's
+// generic, so just fess up and call this the cephfs filter.
+class PGLSCephFSFilter : public PGLSFilter {
+protected:
+  std::string scrub_tag;
+public:
+  PGLSCephFSFilter(bufferlist::iterator& params) {
+    ::decode(scrub_tag, params);
+    if (scrub_tag.empty()) {
+      xattr = "";
+    } else {
+      xattr = "scrub_tag";
+    }
+    generic_dout(0) << "scrub_tag=" << scrub_tag << dendl;
+  }
+
+  virtual ~PGLSCephFSFilter() {}
   virtual bool filter(const std::string &obj_name, bufferlist& xattr_data,
                       bufferlist& outdata);
 };
