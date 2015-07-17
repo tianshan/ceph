@@ -109,6 +109,12 @@ namespace librados
     /// move the iterator to a given hash position.  this may (will!) be rounded to the nearest pg.
     uint32_t seek(uint32_t pos);
 
+    /**
+     * Configure PGLS filter to be applied OSD-side (requires caller
+     * to know/understand the format expected by the OSD)
+     */
+    void set_filter(bufferlist &bl);
+
   private:
     NObjectIterator(ObjListCtx *ctx_);
     void get_next();
