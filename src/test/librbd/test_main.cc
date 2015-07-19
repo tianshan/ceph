@@ -12,6 +12,7 @@ extern void register_test_librbd();
 #ifdef TEST_LIBRBD_INTERNALS
 extern void register_test_image_watcher();
 extern void register_test_internal();
+extern void register_test_object_map();
 #endif // TEST_LIBRBD_INTERNALS
 
 int main(int argc, char **argv)
@@ -20,6 +21,7 @@ int main(int argc, char **argv)
 #ifdef TEST_LIBRBD_INTERNALS
   register_test_image_watcher();
   register_test_internal();
+  register_test_object_map();
 #endif // TEST_LIBRBD_INTERNALS
 
   ::testing::InitGoogleTest(&argc, argv);
