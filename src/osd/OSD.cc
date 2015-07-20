@@ -8248,6 +8248,10 @@ void OSD::ShardedOpWQ::_process(uint32_t thread_index, heartbeat_handle_d *hb ) 
     }
   }
   pair<PGRef, OpRequestRef> item = sdata->pqueue.dequeue();
+  dout(5) << "tianshan priority: " 
+          << item.second->get_req()->get_priority()
+          << dendl;
+          
   sdata->pg_for_processing[&*(item.first)].push_back(item.second);
   sdata->sdata_op_ordering_lock.Unlock();
   ThreadPool::TPHandle tp_handle(osd->cct, hb, timeout_interval, 
