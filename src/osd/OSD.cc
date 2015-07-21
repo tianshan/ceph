@@ -8248,9 +8248,7 @@ void OSD::ShardedOpWQ::_process(uint32_t thread_index, heartbeat_handle_d *hb ) 
     }
   }
   pair<PGRef, OpRequestRef> item = sdata->pqueue.dequeue();
-  dout(5) << "tianshan priority: " 
-          << item.second->get_req()->get_priority()
-          << dendl;
+  
           
   sdata->pg_for_processing[&*(item.first)].push_back(item.second);
   sdata->sdata_op_ordering_lock.Unlock();
@@ -8291,7 +8289,7 @@ void OSD::ShardedOpWQ::_process(uint32_t thread_index, heartbeat_handle_d *hb ) 
   f->flush(*_dout);
   delete f;
   *_dout << dendl;
-
+  
   osd->dequeue_op(item.first, op, tp_handle);
 
   {
@@ -8368,7 +8366,7 @@ void OSD::dequeue_op(
   utime_t now = ceph_clock_now(cct);
   op->set_dequeued_time(now);
   utime_t latency = now - op->get_req()->get_recv_stamp();
-  dout(10) << "dequeue_op " << op << " prio " << op->get_req()->get_priority()
+  dout(5) << "dequeue_op " << op << " prio " << op->get_req()->get_priority()
 	   << " cost " << op->get_req()->get_cost()
 	   << " latency " << latency
 	   << " " << *(op->get_req())
@@ -8401,7 +8399,7 @@ void OSD::dequeue_op(
   pg->do_request(op, handle);
 
   // finish
-  dout(10) << "dequeue_op " << op << " finish" << dendl;
+  dout(5) << "dequeue_op " << op << " finish" << dendl;
 }
 
 
