@@ -1869,8 +1869,8 @@ private:
     osd_timeout(osd_timeout),
     op_throttle_bytes(cct, "objecter_bytes", cct->_conf->objecter_inflight_op_bytes),
     op_throttle_ops(cct, "objecter_ops", cct->_conf->objecter_inflight_ops),
-    epoch_barrier(0),
-    client_priority(0)
+    client_priority(0),
+    epoch_barrier(0)
   { }
   ~Objecter();
 
