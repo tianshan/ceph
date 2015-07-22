@@ -2264,10 +2264,10 @@ extern "C" void rados_shutdown(rados_t cluster)
 
 extern "C" int rados_set_client_priority(rados_t cluster, int *priority)
 {
-    tracepoint(librados, rados_set_client_priority_enter, priority);
+    //tracepoint(librados, rados_set_client_priority_enter, priority);
     librados::RadosClient *client = (librados::RadosClient *)cluster;
     int retval = client->set_client_priority(*priority);
-    tracepoint(librados, rados_set_client_priority_exit, retval);
+    //tracepoint(librados, rados_set_client_priority_exit, retval);
     return retval;
 }
 

@@ -1046,6 +1046,7 @@ public:
   MonClient *monc;
   Finisher *finisher;
 private:
+  int client_priority; 
   OSDMap    *osdmap;
 public:
   using Dispatcher::cct;
@@ -1064,7 +1065,6 @@ private:
   bool keep_balanced_budget;
   bool honor_osdmap_full;
   
-  int client_priority;
 
 public:
   void maybe_request_map();
@@ -1848,6 +1848,7 @@ private:
 	   double osd_timeout) :
     Dispatcher(cct_),
     messenger(m), monc(mc), finisher(fin),
+    client_priority(0),
     osdmap(new OSDMap),
     initialized(0),
     last_tid(0), client_inc(-1), max_linger_id(0),
@@ -1869,7 +1870,6 @@ private:
     osd_timeout(osd_timeout),
     op_throttle_bytes(cct, "objecter_bytes", cct->_conf->objecter_inflight_op_bytes),
     op_throttle_ops(cct, "objecter_ops", cct->_conf->objecter_inflight_ops),
-    client_priority(0),
     epoch_barrier(0)
   { }
   ~Objecter();
