@@ -417,7 +417,7 @@ CEPH_RADOS_API void rados_shutdown(rados_t cluster);
  * @param priority the client priority, Inheritance to op
  * @return 
  */
-CEPH_RADOS_API int rados_set_client_priority(rados_t cluster, rados_t priority);
+CEPH_RADOS_API int rados_set_client_priority(rados_t cluster, int *priority);
 
 /**
  * @defgroup librados_h_config Configuration
