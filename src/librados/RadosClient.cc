@@ -291,6 +291,22 @@ int librados::RadosClient::connect()
   return err;
 }
 
+int librados::RadosClient::set_client_priority(int priority)
+{
+    // objecter may not init
+    if (state != CONNECTED)
+        return -ENOENT;
+    if (!objecter)
+        return -ENOENT;
+    
+    if (priority<0 || priority>255)
+        return -EIO;
+    
+    objecter->set_client_priority(priority);
+    
+    return 0;
+}
+
 void librados::RadosClient::shutdown()
 {
   lock.Lock();

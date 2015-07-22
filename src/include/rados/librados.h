@@ -412,6 +412,14 @@ CEPH_RADOS_API void rados_shutdown(rados_t cluster);
 /** @} init */
 
 /**
+ * set the client default priority
+ * 
+ * @param priority the client priority, Inheritance to op
+ * @return 
+ */
+CEPH_RADOS_API int rados_set_client_priority(rados_t cluster, rados_t priority);
+
+/**
  * @defgroup librados_h_config Configuration
  * These functions read and update Ceph configuration for a cluster
  * handle. Any configuration changes must be done before connecting to
