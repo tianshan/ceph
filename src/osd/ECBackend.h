@@ -394,8 +394,9 @@ public:
   friend ostream &operator<<(ostream &lhs, const Op &rhs);
 
   struct OverwriteInfo {
-    map<version_t, pair<uint64_t, uint64_t> > overwrite_history;
   public:
+    map<version_t, pair<uint64_t, uint64_t> > overwrite_history;
+
     void overwrite(version_t version, uint64_t off, uint64_t len) {
       overwrite_history.insert(
         make_pair(

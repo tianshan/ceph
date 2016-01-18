@@ -1131,44 +1131,103 @@ void ECBackend::handle_sub_read(
         if (op.for_recovery) {
         }
         else {
+          // save already read date scope <off, len>
+          map<uint64_t, uint64_t> readed;
+          uint32_t overwrite_read_times = 0;
           // read overwrite data
-          for (map<version_t, pair<uint64_t, uint64_t> >::iterator ow_iter =
-              ow_info->begin(); ow_iter != ow_info->end(); ++ow_iter) {
+          for (map<version_t, pair<uint64_t, uint64_t> >::reverse_iterator ow_iter =
+                 ow_info->overwrite_history.rbegin();
+               ow_iter != ow_info->overwrite_history.rend();
+               ++ow_iter) {
             map<int, pair<uint64_t, uint64_t>> shards_to_write =
               sinfo.offset_len_to_chunk_offset(ow_iter->second, ec_impl->get_chunk_count());
 
             pair<uint64_t, uint64_t> &ver_off = shards_to_write[shard_id];
-            // ver_off = sinfo.offset_len_to_stripe_bounds(ow_iter->second);
             // no overlap
             // this shard no overwrite or needed read scope has no overlap with overwrite
-            if ( ver_off.second == 0 || (j->get<0>() + j->get<1>() ) < ver_off.first
-                || j->get<0>() > (ver_off.first + ver_off.second) )
+            if ( ver_off.second == 0 || (j->get<0>() + j->get<1>() ) <= ver_off.first
+                || j->get<0>() >= (ver_off.first + ver_off.second) )
               continue;
 
+            // whether overwrite offset is bigger than need offset
             bool flag = ver_off.first > j->get<0>();
+            // exact read offset
+            uint64_t read_off = flag ? ver_off.first : j->get<0>();
+            // distance of extact read begin and need read begin
             uint64_t _off = flag ? (ver_off.first - j->get<0>()) : (j->get<0>() - ver_off.first); 
-            uint64_t _len = flag ? 
+            // exact read length
+            uint64_t read_len = flag ? 
                   MIN(j->get<1>() - _off, ver_off.second) 
                   : MIN(j->get<1>(), ver_off.second - _off);
-            dout(20) << __func__ << " read " << i->first
+
+            // judge whether readed in lastest version
+            map<uint64_t, uint64_t> read_merge;
+            uint64_t last_off = read_off, last_end;
+            for (map<uint64_t, uint64_t>::iterator r_iter =
+                   readed.begin();
+                 r_iter != readed.end() && last_off < read_off + read_len;
+                 ++r_iter) {
+              if (last_off < r_iter->first) {
+                last_end = MIN(r_iter->first, read_off + read_len);
+                read_merge.insert(make_pair(last_off, last_end - last_off));
+                last_off = last_end;
+              }
+              else if (last_off < r_iter->first + r_iter->second) {
+                last_off = r_iter->second;
+              }
+            }
+            if (last_off < read_off + read_len) {
+              read_merge.insert(make_pair(last_off, read_off + read_len - last_off));
+            }
+            // merge into readed
+            for (map<uint64_t, uint64_t>::iterator m_it =
+                   read_merge.begin();
+                 m_it != read_merge.end();
+                 ++m_it) {
+              uint64_t new_off = m_it->first;
+              uint64_t new_len = m_it->second;
+              map<uint64_t, uint64_t>::iterator lower_bound = readed.lower_bound(new_off);
+              if (lower_bound == readed.end())
+                readed.insert(*m_it);
+              else {
+                if (lower_bound != readed.begin()) {
+                  --lower_bound;
+                  if (lower_bound->first + lower_bound->second == new_off) {
+                    new_off = lower_bound->first;
+                    new_len += lower_bound->second;
+                  }
+                  ++lower_bound;
+                }
+                if (new_off + new_len == lower_bound->first) {
+                  new_len += lower_bound->second;
+                  readed.erase(lower_bound);
+                }
+                readed.erase(new_len);
+                readed.insert(make_pair(new_off, new_len));
+              }
+            }
+            if (read_merge.size() == 0)
+              continue;
+            overwrite_read_times += 1;
+
+            dout(20) << __func__ << " read obj " << i->first
                      << " version " << ow_iter->first
                      << " ver_off " << ver_off.first
                      << " ver_len " << ver_off.second
                      << " req_off " << j->get<0>()
                      << " req_len " << j->get<1>()
-                     << " off " << (flag ? ver_off.first : j->get<0>())
-                     << " len " << _len
+                     << " read_off " << read_off
+                     << " read_len " << read_len
                      << dendl;
             bufferlist ver_bl;
             r = store->read(
               coll,
               ghobject_t(i->first, ow_iter->first, shard),
-              flag ? ver_off.first : j->get<0>(),
-              _len,
+              read_off,
+              read_len,
               ver_bl, j->get<2>(),
               true);
             if (r < 0) {
-              // TODO: shard did not write
               get_parent()->clog_error() << __func__
                                      << ": Error " << r
                                      << " reading "
@@ -1177,12 +1236,20 @@ void ECBackend::handle_sub_read(
                       << " reading " << i->first << dendl;
               goto error;
             } else {
-              bl.copy_in(
-                flag ? _off : 0,
-                _len,
-                ver_bl.c_str()); 
+              uint64_t merge_off = flag ? _off : 0;
+              for (map<uint64_t, uint64_t>::iterator m_it =
+                     read_merge.begin();
+                   m_it != read_merge.end();
+                   ++m_it) {
+                bl.copy_in(
+                  merge_off + m_it->first - read_off,
+                  m_it->second,
+                  ver_bl.c_str() + (m_it->first - read_off)
+                ); 
+              }
             }
           }
+          dout(20) << __func__ << " overwrite_read_times " << overwrite_read_times << dendl;
         }
 
 	reply->buffers_read[i->first].push_back(
@@ -1236,6 +1303,7 @@ error:
       reply->errors[*i] = r;
     }
   }
+  // read object util specify version, for recovery purpose
   for (map<hobject_t, list<version_t> >::iterator i = op.recovery_read.begin();
        i != op.recovery_read.end();
        ++i) {
