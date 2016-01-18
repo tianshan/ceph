@@ -61,3 +61,12 @@ bin_PROGRAMS += cephfs-data-scan
 endif # WITH_RADOS
 endif # ENABLE_CLIENT
 endif # WITH_MDS
+
+
+if WITH_OSD
+
+ceph_ecbackend_tool_SOURCES = tools/ceph_ecbackend_tool.cc
+ceph_ecbackend_tool_LDADD = $(LIBOSD) $(LIBOS) $(CEPH_GLOBAL) $(BOOST_PROGRAM_OPTIONS_LIBS)
+bin_PROGRAMS += ceph-ecbackend-tool
+
+endif # WITH_OSD
