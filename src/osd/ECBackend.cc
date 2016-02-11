@@ -137,23 +137,6 @@ ostream &operator<<(ostream &lhs, const ECBackend::Op &rhs)
   return lhs;
 }
 
-ostream &operator<<(ostream &lhs, const ECBackend::WriteOp &rhs)
-{
-  lhs << "Op(" << rhs.hoid
-      << " v=" << rhs.version
-      << " tt=" << rhs.trim_to
-      << " tid=" << rhs.tid
-      << " reqid=" << rhs.reqid;
-  if (rhs.client_op && rhs.client_op->get_req()) {
-    lhs << " client_op=";
-    rhs.client_op->get_req()->print(lhs);
-  }
-  lhs << " pending_commit=" << rhs.pending_commit
-      << " pending_apply=" << rhs.pending_apply
-      << ")";
-  return lhs;
-}
-
 ostream &operator<<(ostream &lhs, const ECBackend::RecoveryOp &rhs)
 {
   return lhs << "RecoveryOp("
@@ -679,7 +662,7 @@ void ECBackend::continue_recovery_op(
            it != op.recovery_returned_data.end();
            ++it) {
         map<int, pair<uint64_t, uint64_t>> shards_to_write =
-          sinfo.offset_len_to_chunk_offset(ow_info->overwrite_history[it->first],
+          sinfo.offset_len_to_chunk_offset(ow_info->history[it->first],
                                            (int)ec_impl->get_chunk_count());
         for (map<shard_id_t, bufferlist>::iterator i =
                it->second.begin();
@@ -1322,7 +1305,7 @@ error:
          j != i->second.end(); ++j) {
       bufferlist bl;
       map<version_t, pair<uint64_t, uint64_t> >::const_iterator it = 
-        ow_info->overwrite_history.find(*j);
+        ow_info->history.find(*j);
       assert(it != ow_info->end());
       map<int, pair<uint64_t, uint64_t>> shards_to_write =
         sinfo.offset_len_to_chunk_offset(it->second, ec_impl->get_chunk_count());
@@ -1381,32 +1364,19 @@ void ECBackend::handle_sub_write_reply(
   ECSubWriteReply &op)
 {
   map<ceph_tid_t, Op>::iterator i = tid_to_op_map.find(op.tid);
-  // assert(i != tid_to_op_map.end());
-  Op *tid_op;
-  if (i == tid_to_op_map.end()) {
-    map<ceph_tid_t, WriteOp>::iterator i = tid_to_overwrite_map.find(op.tid);
-    assert(i != tid_to_overwrite_map.end());
-    tid_op = &(i->second);
-  } else {
-    tid_op = &(i->second);
-  }
+  assert(i != tid_to_op_map.end());
   if (op.committed) {
-    // assert(i->second.pending_commit.count(from));
-    // i->second.pending_commit.erase(from);
-    assert(tid_op->pending_commit.count(from));
-    tid_op->pending_commit.erase(from);
+    assert(i->second.pending_commit.count(from));
+    i->second.pending_commit.erase(from);
     if (from != get_parent()->whoami_shard()) {
       get_parent()->update_peer_last_complete_ondisk(from, op.last_complete);
     }
   }
   if (op.applied) {
-    // assert(i->second.pending_apply.count(from));
-    // i->second.pending_apply.erase(from);
-    assert(tid_op->pending_apply.count(from));
-    tid_op->pending_apply.erase(from);
+    assert(i->second.pending_apply.count(from));
+    i->second.pending_apply.erase(from);
   }
-  // check_op(&(i->second));
-  check_op(tid_op);
+  check_op(&(i->second));
 }
 
 void ECBackend::handle_sub_read_reply(
@@ -1867,19 +1837,7 @@ void ECBackend::submit_transaction(
 {
   assert(!tid_to_op_map.count(tid));
 
-  ECTransaction *ec_tran = static_cast<ECTransaction*>(_t);
-  Op *op;
-  if (ec_tran->offset_write) {
-    op = &(tid_to_overwrite_map[tid]);
-    // copy the write op 
-    WriteOp *w_op = static_cast<WriteOp*>(op);
-    w_op->off = ec_tran->get_writeop()->off;
-    w_op->len = ec_tran->get_writeop()->len;
-    w_op->fadvise_flags = ec_tran->get_writeop()->fadvise_flags;
-    w_op->bl.claim(ec_tran->get_writeop()->bl);
-  } else {
-    op = &(tid_to_op_map[tid]);
-  }
+  Op *op = &(tid_to_op_map[tid]);
   op->hoid = hoid;
   op->version = at_version;
   op->trim_to = trim_to;
@@ -1893,8 +1851,11 @@ void ECBackend::submit_transaction(
   op->reqid = reqid;
   op->client_op = client_op;
   
-  // op->t = static_cast<ECTransaction*>(_t);
-  op->t = ec_tran;
+  op->t = static_cast<ECTransaction*>(_t);
+  if (op->t->is_overwrite()) {
+    op->write = &(tid_to_overwrite_map[tid]);
+    op->write->claim(op->t->get_writeop());
+  }
 
   set<hobject_t, hobject_t::BitwiseComparator> need_hinfos;
   op->t->get_append_objects(&need_hinfos);
@@ -1955,11 +1916,10 @@ void ECBackend::submit_transaction(
 
   // mark on write
   in_progress_write_tid.insert(make_pair(op->hoid, op->tid));
-  if (ec_tran->offset_write) {
+  if (op->t->is_overwrite()) {
     continue_write_op(op);
   } else {
-    start_write(op);
-    // writing.push_back(op);
+    start_op(op);
     write_submit_done(op);
   }
   dout(10) << "onreadable_sync: " << op->on_local_applied_sync << dendl;
@@ -2327,8 +2287,8 @@ void ECBackend::check_op(Op *op)
     in_progress_write_tid.erase(op->hoid);
 
     map<hobject_t, eversion_t>::iterator it = to_apply.find(op->hoid);
-    tid_to_op_map.erase(op->tid);
     tid_to_overwrite_map.erase(op->tid);
+    tid_to_op_map.erase(op->tid);    
 
     if (it != to_apply.end()) {
       start_apply_op(it->first, it->second);
@@ -2344,7 +2304,7 @@ void ECBackend::check_op(Op *op)
   }
 }
 
-void ECBackend::start_write(Op *op) {
+void ECBackend::start_op(Op *op) {
   map<shard_id_t, ObjectStore::Transaction> trans;
   for (set<pg_shard_t>::const_iterator i =
 	 get_parent()->get_actingbackfill_shards().begin();
@@ -2414,21 +2374,28 @@ void ECBackend::start_write(Op *op) {
   }
 }
 
-void ECBackend::continue_write_op(Op *_op)
+void ECBackend::continue_write_op(Op *op)
 {
-  WriteOp *op = static_cast<WriteOp*>(_op);
-  dout(10) << __func__ << *op << dendl;
-  switch (op->state) {
-    case WriteOp::IDLE: {
-      op->state = WriteOp::READING;
+  WriteProgress *write = op->write;
+  switch (write->state) {
+    case WriteProgress::IDLE: {
+      write->state = WriteProgress::PREPARING;
+
+      // prepare null write trans
+      op->t->generate_transactions(
+        op->unstable_hash_infos,
+        ec_impl,
+        get_parent()->get_info().pgid.pgid,
+        sinfo,
+        &(write->trans),
+        &(op->temp_added),
+        &(op->temp_cleared));
 
       const hobject_t &hoid = op->hoid;
-      uint64_t off = op->t->get_writeop()->off;
-      uint64_t len = op->t->get_writeop()->len;
-      uint32_t flags = op->t->get_writeop()->fadvise_flags;
-      pair<uint64_t, uint64_t> tmp = sinfo.offset_len_to_stripe_bounds(make_pair(off, len));
+      pair<uint64_t, uint64_t> tmp =
+        sinfo.offset_len_to_stripe_bounds(make_pair(write->off, write->len));
       list<boost::tuple<uint64_t, uint64_t, uint32_t> > to_read;
-      to_read.push_back(boost::make_tuple(tmp.first, tmp.second, flags));
+      to_read.push_back(boost::make_tuple(tmp.first, tmp.second, write->fadvise_flags));
 
       set<int> want_to_read;
       get_want_to_read_shards(&want_to_read);
@@ -2465,17 +2432,17 @@ void ECBackend::continue_write_op(Op *_op)
       dout(10) << __func__ << ": IDLE return " << *op << dendl;
       break;
     }
-    case WriteOp::READING: {
+    case WriteProgress::PREPARING: {
       // if the front op has not complete
       if (op->hoid != pending_op.front()->hoid ) {
         return;
       }
       // read has not complete 
-      if (op->returned_data.length() == 0) {
+      if (write->returned_data.length() == 0) {
         return;
       }
 
-      op->state = WriteOp::WRITING;
+      write->state = WriteProgress::WRITING;
 
       // update the write version
       update_op_version(op);
@@ -2488,20 +2455,20 @@ void ECBackend::continue_write_op(Op *_op)
         want.insert(i);
       }
       map<int, bufferlist> target;
-      int r = ECUtil::encode(sinfo, ec_impl, op->returned_data, want, &target);
+      int r = ECUtil::encode(sinfo, ec_impl, write->returned_data, want, &target);
       assert(r == 0);
 
       // prepare shard transaction
       pair<uint64_t, uint64_t> to_write;
-      if (op->append_off) {
-        uint64_t append_len = op->len - (op->append_off - op->off);
+      if (write->append_off) {
+        uint64_t append_len = write->len - (write->append_off - write->off);
         append_len += sinfo.get_stripe_width() - (append_len % sinfo.get_stripe_width());
         to_write = make_pair(
-          op->off,
-          op->append_off - op->off + append_len
+          write->off,
+          write->append_off - write->off + append_len
           );
       } else {
-        to_write = make_pair(op->off, op->len);
+        to_write = make_pair(write->off, write->len);
       }
 
       pair<uint64_t, uint64_t> to_write_bound = sinfo.offset_len_to_stripe_bounds(to_write);
@@ -2512,23 +2479,23 @@ void ECBackend::continue_write_op(Op *_op)
       const vector<int> &chunk_mapping = ec_impl->get_chunk_mapping();
               
       // get history overwrite info
-      op->overwrite_info = get_overwrite_info(op->hoid);
-      assert(op->overwrite_info);
-      op->overwrite_info->overwrite(
+      write->overwrite_info = get_overwrite_info(op->hoid);
+      assert(write->overwrite_info);
+      write->overwrite_info->overwrite(
         op->version.version,
         to_write);
       bufferlist ow_buf;
-      ::encode(*(op->overwrite_info), ow_buf);
+      ::encode(*(write->overwrite_info), ow_buf);
 
-      map<shard_id_t, ObjectStore::Transaction> trans;
+      // map<shard_id_t, ObjectStore::Transaction> trans;
       pg_t pgid = get_parent()->get_info().pgid.pgid;
       for (set<pg_shard_t>::const_iterator i =
                 get_parent()->get_actingbackfill_shards().begin();
            i != get_parent()->get_actingbackfill_shards().end();
            ++i) {
         dout(20) << __func__ << " trans " << i->shard << dendl;
-        trans[i->shard];
-        trans[i->shard].set_use_tbl(parent->transaction_use_tbl());
+        write->trans[i->shard];
+        write->trans[i->shard].set_use_tbl(parent->transaction_use_tbl());
 
         op->pending_apply.insert(*i);
         op->pending_commit.insert(*i);
@@ -2546,18 +2513,21 @@ void ECBackend::continue_write_op(Op *_op)
           
         if (real_write_offset.second) {
           bufferlist bl;
-          bl.substr_of(target[i->shard], real_write_offset.first - to_write_chunk.first, real_write_offset.second);
+          bl.substr_of(
+            target[i->shard],
+            real_write_offset.first - to_write_chunk.first,
+            real_write_offset.second);
           // generate objectstore transaction
-          trans[i->shard].write(
+          write->trans[i->shard].write(
             coll_t(spg_t(pgid, i->shard)),
             ghobject_t(op->hoid, op->version.version, i->shard),
             real_write_offset.first,
             bl.length(),
             bl,
-            op->fadvise_flags);
+            write->fadvise_flags);
         }
         
-        trans[i->shard].setattr(
+        write->trans[i->shard].setattr(
           coll_t(spg_t(pgid, i->shard)),
           ghobject_t(op->hoid, ghobject_t::NO_GEN, i->shard),
           OW_KEY,
@@ -2575,7 +2545,7 @@ void ECBackend::continue_write_op(Op *_op)
           op->reqid,
           op->hoid,
           stats,
-          trans[i->shard],
+          write->trans[i->shard],
           op->version,
           op->trim_to,
           op->trim_rollback_to,
@@ -2604,11 +2574,11 @@ void ECBackend::continue_write_op(Op *_op)
       write_submit_done(op);
       break;
     }
-    case WriteOp::WRITING: {
-      op->state = WriteOp::COMPLETE;
+    case WriteProgress::WRITING: {
+      write->state = WriteProgress::COMPLETE;
       break;
     }
-    case WriteOp::COMPLETE:
+    case WriteProgress::COMPLETE:
     default: {
       assert(0);
     };
@@ -2620,8 +2590,8 @@ void ECBackend::write_submit_done(Op *op) {
   pending_op.pop_front();
   writing.push_back(op);
   
-  if (op->t->offset_write) {
-    WriteOp *w_op = static_cast<WriteOp*>(op);
+  if (op->t->is_overwrite()) {
+    WriteProgress *w_op = op->write;
     if (w_op->overwrite_info->need_apply()) {
       assert(to_apply.count(op->hoid) == 0);
       to_apply.insert(make_pair(op->hoid, op->version));
@@ -2657,12 +2627,12 @@ void ECBackend::continue_next_op(const hobject_t last_hoid) {
 
     // mark on writing
     in_progress_write_tid.insert(make_pair(next_op->hoid, next_op->tid));
-    if (next_op->t->offset_write) {
+    if (next_op->t->is_overwrite()) {
       continue_write_op(next_op);
     } else {
       // update op version, because it is delayed
       update_op_version(next_op);
-      start_write(next_op);
+      start_op(next_op);
       // writing.push_back(next_op);
       write_submit_done(next_op);
     }
@@ -2691,8 +2661,8 @@ void ECBackend::start_apply_op(const hobject_t &hoid, eversion_t prev_version) {
   
   // prepare transaction
   for (map<version_t, pair<uint64_t, uint64_t> >::iterator j = 
-         ow_info->overwrite_history.begin();
-       j != ow_info->overwrite_history.end();
+         ow_info->history.begin();
+       j != ow_info->history.end();
        ++j) {
 
     map<int, pair<uint64_t, uint64_t>> shards_to_write =
@@ -2798,9 +2768,10 @@ void ECBackend::handle_write_read_complete(
 
   assert(in_progress_write_tid.count(hoid) > 0);
   ceph_tid_t tid = in_progress_write_tid[hoid];
-  map<ceph_tid_t, WriteOp>::iterator iter = tid_to_overwrite_map.find(tid);
-  assert(iter != tid_to_overwrite_map.end());
-  WriteOp *op = &(iter->second);
+  map<ceph_tid_t, Op>::iterator iter = tid_to_op_map.find(tid);
+  assert(iter != tid_to_op_map.end());
+  Op *op = &(iter->second);
+  WriteProgress *w_op = op->write;
 
   // read data
   map<int, bufferlist> from;
@@ -2811,31 +2782,31 @@ void ECBackend::handle_write_read_complete(
   }  
   // write data
   bufferlist *old_data;
-  old_data = &(op->returned_data);
+  old_data = &(w_op->returned_data);
   
   int r = ECUtil::decode(sinfo, ec_impl, from, old_data);
   assert(r == 0);
   
   pair<uint64_t, uint64_t> to_write;
-  to_write = sinfo.offset_len_to_stripe_bounds(make_pair(op->off, op->len));
+  to_write = sinfo.offset_len_to_stripe_bounds(make_pair(w_op->off, w_op->len));
 
   dout(10) << __func__ << " decode done "
-           << " op_off " << op->off
-           << " op_len " << op->len
+           << " op_off " << w_op->off
+           << " op_len " << w_op->len
            << " read_data_len " << old_data->length()
            << dendl;
   // apply write data
   // if data is begin than original data
-  if (op->off - to_write.first + op->len > old_data->length()) {
+  if (w_op->off - to_write.first + w_op->len > old_data->length()) {
     // this is original data length
-    op->append_off = to_write.first + old_data->length();
-    uint64_t before_len = old_data->length() - (op->off - to_write.first);
+    w_op->append_off = to_write.first + old_data->length();
+    uint64_t before_len = old_data->length() - (w_op->off - to_write.first);
     if (before_len) {
       old_data->copy_in(
-        op->off - to_write.first,
-        before_len, op->bl.c_str());
+        w_op->off - to_write.first,
+        before_len, w_op->bl.c_str());
     }
-    old_data->append(op->bl.c_str() + before_len, op->len - before_len);
+    old_data->append(w_op->bl.c_str() + before_len, w_op->len - before_len);
     if (old_data->length() % sinfo.get_stripe_width()) {
       old_data->append_zero(
         sinfo.get_stripe_width() - 
@@ -2844,8 +2815,8 @@ void ECBackend::handle_write_read_complete(
   } else {
     // append write path is start_write
     // so use 0 indicate no append
-    op->append_off = 0;
-    old_data->copy_in(op->off - to_write.first, op->len, op->bl.c_str());
+    w_op->append_off = 0;
+    old_data->copy_in(w_op->off - to_write.first, w_op->len, w_op->bl.c_str());
   }
   
   // go into write state
@@ -2854,13 +2825,13 @@ void ECBackend::handle_write_read_complete(
 
 void ECBackend::OverwriteInfo::encode(bufferlist& bl) const {
   ENCODE_START(1, 1, bl);
-  ::encode(overwrite_history, bl);
+  ::encode(history, bl);
   ENCODE_FINISH(bl);
 }
 
 void ECBackend::OverwriteInfo::decode(bufferlist::iterator &bl) {
   DECODE_START(1, bl);
-  ::decode(overwrite_history, bl);
+  ::decode(history, bl);
   DECODE_FINISH(bl);
 }
 
@@ -3175,8 +3146,8 @@ void ECBackend::trim_stashed_object(
   // delete unapplied overwrite data
   OverwriteInfoRef ow_info = get_overwrite_info(hoid, old_version);
   for (map<uint64_t, pair<uint64_t, uint64_t> >::iterator i =
-         ow_info->overwrite_history.begin();
-       i != ow_info->overwrite_history.end();
+         ow_info->history.begin();
+       i != ow_info->history.end();
        ++i) {
     t->remove(
       coll, ghobject_t(hoid, i->first, get_parent()->whoami_shard().shard));

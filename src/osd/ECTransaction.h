@@ -38,6 +38,7 @@ public:
     uint64_t len;
     bufferlist bl;
     uint32_t fadvise_flags;
+    WriteOp() {}
     WriteOp(const hobject_t &oid, uint64_t off, uint64_t len, bufferlist &bl, uint32_t flags)
       : oid(oid), off(off), len(len), bl(bl), fadvise_flags(flags) {}
   };
@@ -97,7 +98,7 @@ public:
   struct NoOp {};
   typedef boost::variant<
     AppendOp,
-    // WriteOp,
+    WriteOp,
     CloneOp,
     RenameOp,
     StashOp,
@@ -108,11 +109,34 @@ public:
     AllocHintOp,
     NoOp> Op;
   list<Op> ops;
-  list<WriteOp> writeops;
   uint64_t written;
-  bool offset_write;
 
-  ECTransaction() : written(0), offset_write(false) {}
+  bool overwrite;
+
+  bool is_overwrite_op(const Op &op) const {
+    if (op.which() == 1)
+      return true;
+    return false;
+  }
+  bool is_overwrite() const {
+    return overwrite;
+  }
+
+  WriteOp get_writeop() {
+    assert(overwrite);
+    for (list<Op>::iterator it = ops.begin();
+         it != ops.end();
+         ++it) {
+      if (is_overwrite_op(*it)) {
+        WriteOp op = boost::get<WriteOp>(*it);
+        ops.erase(it);
+        return op;
+      }
+    }
+    return WriteOp();
+  }
+
+  ECTransaction() : written(0), overwrite(false) {}
   /// Write
   void touch(
     const hobject_t &hoid) {
@@ -142,17 +166,10 @@ public:
         touch(hoid);
         return;
     }
-    offset_write = true;
-
     written += off + len > written ? (off + len - written) : 0;
     assert(len == bl.length());
-    writeops.push_back(WriteOp(hoid, off, len, bl, fadvise_flags));
-  }
-  WriteOp* get_writeop() {
-    assert(!writeops.empty());
-    WriteOp* op = &(writeops.front());
-    // writeops.pop_front();
-    return op;
+    ops.push_back(WriteOp(hoid, off, len, bl, fadvise_flags));
+    overwrite = true;
   }
   void stash(
     const hobject_t &hoid,
@@ -207,7 +224,7 @@ public:
     ops.push_back(NoOp());
   }
   bool empty() const {
-    return ops.empty() && writeops.empty();
+    return ops.empty();
   }
   uint64_t get_bytes_written() const {
     return written;
@@ -215,6 +232,9 @@ public:
   template <typename T>
   void visit(T &vis) const {
     for (list<Op>::const_iterator i = ops.begin(); i != ops.end(); ++i) {
+      if (is_overwrite_op(*i)) {
+        assert(0 == "overwrite should has been poped");
+      }
       boost::apply_visitor(vis, *i);
     }
   }
