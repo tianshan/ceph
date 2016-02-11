@@ -368,6 +368,7 @@ public:
     ReadOp &rop);
 
 
+  struct WriteProgress;
   /**
    * Client writes
    *
@@ -402,6 +403,8 @@ public:
 
     set<pg_shard_t> pending_commit;
     set<pg_shard_t> pending_apply;
+    
+    WriteProgress *write;
 
     map<hobject_t, ECUtil::HashInfoRef, hobject_t::BitwiseComparator> unstable_hash_infos;
     ~Op() {
@@ -414,7 +417,7 @@ public:
   friend ostream &operator<<(ostream &lhs, const Op &rhs);
 
   struct OverwriteInfo {
-    map<version_t, pair<uint64_t, uint64_t> > overwrite_history;
+    map<version_t, pair<uint64_t, uint64_t> > history;
   public:
     // limit on unapplied overwrite max count
     int max_count;
@@ -434,8 +437,8 @@ public:
     void init() {
       if (cur_count == 0) {
         for (map<version_t, pair<uint64_t, uint64_t> >::iterator i = 
-               overwrite_history.begin();
-             i != overwrite_history.end();
+               history.begin();
+             i != history.end();
              ++i) {
           cur_count += 1;
           cur_size += i->second.second;
@@ -447,7 +450,7 @@ public:
       cur_count += 1;
       cur_size += to_write.second;
       
-      overwrite_history.insert(
+      history.insert(
         make_pair(
           version, to_write));
     }
@@ -461,50 +464,45 @@ public:
     void encode(bufferlist &bl) const;
     void decode(bufferlist::iterator &bl);
     map<version_t, pair<uint64_t, uint64_t> >::iterator begin() {
-      return overwrite_history.begin();
+      return history.begin();
     }
     map<version_t, pair<uint64_t, uint64_t> >::iterator end() {
-      return overwrite_history.end();
+      return history.end();
     }
     map<version_t, pair<uint64_t, uint64_t> >::size_type size() {
-      return overwrite_history.size();
+      return history.size();
     }
     void clear() {
-      overwrite_history.clear();
+      history.clear();
       cur_count = 0;
       cur_size = 0U;
     }
   };
   typedef ceph::shared_ptr<OverwriteInfo> OverwriteInfoRef;
 
-  struct WriteOp : public Op {
+  struct WriteProgress {
     uint64_t off;
     uint64_t len;
     uint32_t fadvise_flags;
     bufferlist bl;
     uint64_t append_off;
 
-    set<pg_shard_t> missing_on;
-    set<shard_id_t> missing_on_shards;
+    map<shard_id_t, ObjectStore::Transaction> trans;
 
-    ObjectRecoveryInfo recovery_info;
-    ObjectRecoveryProgress recovery_progress;
-
-    bool pending_read;
-    enum state_t { IDLE, READING, WRITING, COMPLETE } state;
+    enum state_t { IDLE, PREPARING, WRITING, COMPLETE } state;
 
     static const char* tostr(state_t state) {
       switch (state) {
-      case ECBackend::WriteOp::IDLE:
+      case ECBackend::WriteProgress::IDLE:
         return "IDLE";
         break;
-      case ECBackend::WriteOp::READING:
-        return "READING";
+      case ECBackend::WriteProgress::PREPARING:
+        return "PREPARING";
         break;
-      case ECBackend::WriteOp::WRITING:
+      case ECBackend::WriteProgress::WRITING:
         return "WRITING";
         break;
-      case ECBackend::WriteOp::COMPLETE:
+      case ECBackend::WriteProgress::COMPLETE:
         return "COMPLETE";
         break;
       default:
@@ -514,24 +512,19 @@ public:
     }
 
     // must be filled if state == WRITING
-    // map<shard_id_t, bufferlist> returned_data;
     bufferlist returned_data;
-    map<string, bufferlist> xattrs;
-    ECUtil::HashInfoRef hinfo;
-    ObjectContextRef obc;
-    set<pg_shard_t> waiting_on_pushes;
-
-    // valid in state READING
-    pair<uint64_t, uint64_t> extent_requested;
-
     // overwrite info
     OverwriteInfoRef overwrite_info;
 
-    void dump(Formatter *f) const;
-
-    WriteOp() : pending_read(false), state(IDLE) {}
+    WriteProgress() : state(IDLE) {}
+    
+    void claim(ECTransaction::WriteOp _op) {
+      off = _op.off;
+      len = _op.len;
+      fadvise_flags = _op.fadvise_flags;
+      bl.claim(_op.bl);
+    }
   };
-  friend ostream &operator<<(ostream &lhs, const WriteOp &rhs);
 
   void continue_recovery_op(
     RecoveryOp &op,
@@ -618,7 +611,7 @@ public:
 
   friend struct ReadCB;
   void check_op(Op *op);
-  void start_write(Op *op);
+  void start_op(Op *op);
 
   friend struct OnOverwriteReadComplete;
   void continue_write_op(Op *op);
@@ -628,7 +621,7 @@ public:
     boost::optional<map<string, bufferlist> > attrs,
     RecoveryMessages *m);
 
-  map<ceph_tid_t, WriteOp> tid_to_overwrite_map;
+  map<ceph_tid_t, WriteProgress> tid_to_overwrite_map;
   // keep the tid util write apply
   map<hobject_t, ceph_tid_t, hobject_t::BitwiseComparator> in_progress_write_tid;
   // keep the op util write submit

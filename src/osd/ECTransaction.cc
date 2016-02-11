@@ -28,6 +28,9 @@ struct AppendObjectsGenerator: public boost::static_visitor<void> {
   void operator()(const ECTransaction::AppendOp &op) {
     out->insert(op.oid);
   }
+  void operator()(const ECTransaction::WriteOp &op) {
+    out->insert(op.oid);
+  }
   void operator()(const ECTransaction::TouchOp &op) {
     out->insert(op.oid);
   }
@@ -176,6 +179,9 @@ struct TransGenerator : public boost::static_visitor<void> {
 	ECUtil::get_hinfo_key(),
 	hbuf);
     }
+  }
+  void operator()(const ECTransaction::WriteOp &op) {
+    // done in ECBackend
   }
   void operator()(const ECTransaction::CloneOp &op) {
     assert(hash_infos.count(op.source));
