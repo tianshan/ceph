@@ -72,6 +72,12 @@ struct RollbackVisitor : public ObjectModDesc::Visitor {
     temp.append(t);
     temp.swap(t);
   }
+  void setomaps(bufferlist &omaps) {
+    // TODO
+  }
+  void setomapheader(bufferlist &header) {
+    // TODO
+  }
 };
 
 void PGBackend::rollback(

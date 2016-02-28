@@ -5446,7 +5446,7 @@ int ReplicatedPG::do_osd_ops(OpContext *ctx, vector<OSDOp>& ops)
 
 	if (pool.info.supports_omap()) {
 	  ObjectMap::ObjectMapIterator iter = osd->store->get_omap_iterator(
-	    coll, ghobject_t(soid)
+	    coll, ghobject_t(soid, ghobject_t::NO_GEN, pg_whoami.shard)
 	    );
 	  assert(iter);
 	  iter->upper_bound(start_after);
@@ -5483,7 +5483,7 @@ int ReplicatedPG::do_osd_ops(OpContext *ctx, vector<OSDOp>& ops)
 
 	if (pool.info.supports_omap()) {
 	  ObjectMap::ObjectMapIterator iter = osd->store->get_omap_iterator(
-	    coll, ghobject_t(soid)
+	    coll, ghobject_t(soid, ghobject_t::NO_GEN, pg_whoami.shard)
 	    );
           if (!iter) {
             result = -ENOENT;
@@ -5513,7 +5513,8 @@ int ReplicatedPG::do_osd_ops(OpContext *ctx, vector<OSDOp>& ops)
       }
       ++ctx->num_read;
       {
-	osd->store->omap_get_header(ch, ghobject_t(soid), &osd_op.outdata);
+	osd->store->omap_get_header(
+          ch, ghobject_t(soid, ghobject_t::NO_GEN, pg_whoami.shard), &osd_op.outdata);
 	ctx->delta_stats.num_rd_kb += SHIFT_ROUND_UP(osd_op.outdata.length(), 10);
 	ctx->delta_stats.num_rd++;
       }
@@ -5534,7 +5535,8 @@ int ReplicatedPG::do_osd_ops(OpContext *ctx, vector<OSDOp>& ops)
 	tracepoint(osd, do_osd_op_pre_omapgetvalsbykeys, soid.oid.name.c_str(), soid.snap.val, list_entries(keys_to_get).c_str());
 	map<string, bufferlist> out;
 	if (pool.info.supports_omap()) {
-	  osd->store->omap_get_values(ch, ghobject_t(soid), keys_to_get, &out);
+	  osd->store->omap_get_values(
+            ch, ghobject_t(soid, ghobject_t::NO_GEN, pg_whoami.shard), keys_to_get, &out);
 	} // else return empty omap entries
 	::encode(out, osd_op.outdata);
 	ctx->delta_stats.num_rd_kb += SHIFT_ROUND_UP(osd_op.outdata.length(), 10);
@@ -5569,8 +5571,8 @@ int ReplicatedPG::do_osd_ops(OpContext *ctx, vector<OSDOp>& ops)
 	       i != assertions.end();
 	       ++i)
 	    to_get.insert(i->first);
-	  int r = osd->store->omap_get_values(ch, ghobject_t(soid),
-					      to_get, &out);
+	  int r = osd->store->omap_get_values(
+            ch, ghobject_t(soid, ghobject_t::NO_GEN, pg_whoami.shard), to_get, &out);
 	  if (r < 0) {
 	    result = r;
 	    break;
@@ -5623,7 +5625,7 @@ int ReplicatedPG::do_osd_ops(OpContext *ctx, vector<OSDOp>& ops)
 	tracepoint(osd, do_osd_op_pre_omapsetvals, soid.oid.name.c_str(), soid.snap.val);
 	break;
       }
-      ctx->mod_desc.mark_unrollbackable();
+      // ctx->mod_desc.mark_unrollbackable();
       ++ctx->num_write;
       {
 	if (maybe_create_new_object(ctx)) {
@@ -5650,6 +5652,12 @@ int ReplicatedPG::do_osd_ops(OpContext *ctx, vector<OSDOp>& ops)
 	    dout(20) << "\t" << i->first << dendl;
 	  }
 	}
+        if (pool.info.require_rollback()) {
+          // TODO: get old omap
+          ctx->mod_desc.setomaps(to_set_bl);
+        } else {
+          ctx->mod_desc.mark_unrollbackable();
+        }
 	t->omap_setkeys(soid, to_set_bl);
 	ctx->delta_stats.num_wr++;
       }
@@ -5663,7 +5671,13 @@ int ReplicatedPG::do_osd_ops(OpContext *ctx, vector<OSDOp>& ops)
 	result = -EOPNOTSUPP;
 	break;
       }
-      ctx->mod_desc.mark_unrollbackable();
+      // ctx->mod_desc.mark_unrollbackable();
+      if (pool.info.require_rollback()) {
+        // TODO: get old header
+        ctx->mod_desc.setomapheader(osd_op.indata);
+      } else {
+        ctx->mod_desc.mark_unrollbackable();
+      }
       ++ctx->num_write;
       {
 	if (maybe_create_new_object(ctx)) {

@@ -3278,6 +3278,18 @@ void ObjectModDesc::visit(Visitor *visitor) const
         visitor->ec_overwrite(write_version);
         break;
       }
+      case SETOMAPS: {
+        bufferlist omaps;
+        ::decode(omaps, bp);
+        visitor->setomaps(omaps);
+        break;
+      }
+      case SETOMAPHEADER: {
+        bufferlist header;
+        ::decode(header, bp);
+        visitor->setomapheader(header);
+        break;
+      }
       default:
 	assert(0 == "Invalid rollback code");
       }

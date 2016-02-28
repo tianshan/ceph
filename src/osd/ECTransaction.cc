@@ -52,6 +52,10 @@ struct AppendObjectsGenerator: public boost::static_visitor<void> {
   void operator()(const ECTransaction::RmAttrOp &op) {}
   void operator()(const ECTransaction::AllocHintOp &op) {}
   void operator()(const ECTransaction::NoOp &op) {}
+  void operator()(const ECTransaction::SetOmapsOp &op) {}
+  void operator()(const ECTransaction::RmOmapsOp &op) {}
+  void operator()(const ECTransaction::SetOmapHeaderOp &op) {}
+  void operator()(const ECTransaction::SetOmapClearOp &op) {}
 };
 void ECTransaction::get_append_objects(
   set<hobject_t, hobject_t::BitwiseComparator> *out) const
@@ -275,6 +279,73 @@ struct TransGenerator : public boost::static_visitor<void> {
     }
   }
   void operator()(const ECTransaction::NoOp &op) {}
+
+  void operator()(const ECTransaction::SetOmapsOp &op) {
+    if (op.is_bufferlist) {
+      bufferlist keys_bl(op.keys_bl);
+      for (map<shard_id_t, ObjectStore::Transaction>::iterator i = trans->begin();
+           i != trans->end();
+           ++i) {
+        i->second.omap_setkeys(
+          get_coll_ct(i->first, op.oid),
+          ghobject_t(op.oid, ghobject_t::NO_GEN, i->first),
+          keys_bl);
+      }
+    } else {
+      map<string, bufferlist> keys(op.keys);
+      for (map<shard_id_t, ObjectStore::Transaction>::iterator i = trans->begin();
+           i != trans->end();
+           ++i) {
+        i->second.omap_setkeys(
+          get_coll_ct(i->first, op.oid),
+          ghobject_t(op.oid, ghobject_t::NO_GEN, i->first),
+          keys);
+      }
+    }
+  }
+  void operator()(const ECTransaction::RmOmapsOp &op) {
+    if (op.is_bufferlist) {
+      bufferlist keys_bl(op.keys_bl);
+      for (map<shard_id_t, ObjectStore::Transaction>::iterator i = trans->begin();
+           i != trans->end();
+           ++i) {
+        i->second.omap_rmkeys(
+          get_coll_ct(i->first, op.oid),
+          ghobject_t(op.oid, ghobject_t::NO_GEN, i->first),
+          keys_bl);
+      }
+    } else {
+      set<string> keys(op.keys);
+      for (map<shard_id_t, ObjectStore::Transaction>::iterator i = trans->begin();
+           i != trans->end();
+           ++i) {
+        i->second.omap_rmkeys(
+          get_coll_ct(i->first, op.oid),
+          ghobject_t(op.oid, ghobject_t::NO_GEN, i->first),
+          keys);
+      }
+    }
+  }
+  void operator()(const ECTransaction::SetOmapHeaderOp &op) {
+    bufferlist header_bl(op.header_bl);
+    for (map<shard_id_t, ObjectStore::Transaction>::iterator i = trans->begin();
+         i != trans->end();
+         ++i) {
+      i->second.omap_setheader(
+        get_coll_ct(i->first, op.oid),
+        ghobject_t(op.oid, ghobject_t::NO_GEN, i->first),
+        header_bl);
+    }
+  }
+  void operator()(const ECTransaction::SetOmapClearOp &op) {
+    for (map<shard_id_t, ObjectStore::Transaction>::iterator i = trans->begin();
+         i != trans->end();
+         ++i) {
+      i->second.omap_clear(
+        get_coll_ct(i->first, op.oid),
+        ghobject_t(op.oid, ghobject_t::NO_GEN, i->first));
+    }
+  }
 };
 
 

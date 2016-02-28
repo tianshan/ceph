@@ -1361,7 +1361,8 @@ public:
   bool is_erasure() const { return get_type() == TYPE_ERASURE; }
 
   bool supports_omap() const {
-    return !(get_type() == TYPE_ERASURE || has_flag(FLAG_DEBUG_FAKE_EC_POOL));
+    // return !(get_type() == TYPE_ERASURE || has_flag(FLAG_DEBUG_FAKE_EC_POOL));
+    return true;
   }
 
   bool requires_aligned_append() const { return is_erasure(); }
@@ -2363,6 +2364,8 @@ public:
     virtual void create() {}
     virtual void update_snaps(set<snapid_t> &old_snaps) {}
     virtual void ec_overwrite(version_t write_version) {}
+    virtual void setomaps(bufferlist &old_omap) {}
+    virtual void setomapheader(bufferlist &old_header) {}
     virtual ~Visitor() {}
   };
   void visit(Visitor *visitor) const;
@@ -2373,7 +2376,9 @@ public:
     DELETE = 3,
     CREATE = 4,
     UPDATE_SNAPS = 5,
-    EC_OVERWRITE = 6
+    EC_OVERWRITE = 6,
+    SETOMAPS = 7,
+    SETOMAPHEADER = 8
   };
   ObjectModDesc() : can_local_rollback(true), rollback_info_completed(false) {}
   void claim(ObjectModDesc &other) {
@@ -2421,6 +2426,22 @@ public:
     ENCODE_START(1, 1, bl);
     append_id(SETATTRS);
     ::encode(old_attrs, bl);
+    ENCODE_FINISH(bl);
+  }
+  void setomaps(bufferlist old_omaps) {
+    if (!can_local_rollback || rollback_info_completed)
+      return;
+    ENCODE_START(1, 1, bl);
+    append_id(SETOMAPS);
+    ::encode(old_omaps, bl);
+    ENCODE_FINISH(bl);
+  }
+  void setomapheader(bufferlist old_header) {
+    if (!can_local_rollback || rollback_info_completed)
+      return;
+    ENCODE_START(1, 1, bl);
+    append_id(SETOMAPHEADER);
+    ::encode(old_header, bl);
     ENCODE_FINISH(bl);
   }
   bool rmobject(version_t deletion_version) {

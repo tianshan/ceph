@@ -95,6 +95,37 @@ public:
       : oid(oid), expected_object_size(expected_object_size),
         expected_write_size(expected_write_size) {}
   };
+  struct SetOmapsOp {
+    hobject_t oid;
+    bufferlist keys_bl;
+    map<string, bufferlist> keys;
+    bool is_bufferlist;
+    SetOmapsOp(const hobject_t &oid, bufferlist &bl)
+      : oid(oid), keys_bl(bl), is_bufferlist(true) {}
+    SetOmapsOp(const hobject_t &oid, map<string, bufferlist> &keys)
+      : oid(oid), keys(keys), is_bufferlist(false) {}
+  };
+  struct RmOmapsOp {
+    hobject_t oid;
+    bufferlist keys_bl;
+    set<string> keys;
+    bool is_bufferlist;
+    RmOmapsOp(const hobject_t &oid, bufferlist &bl)
+      : oid(oid), keys_bl(bl), is_bufferlist(true) {}
+    RmOmapsOp(const hobject_t &oid, set<string> &keys)
+      : oid(oid), keys(keys), is_bufferlist(false) {}
+  };
+  struct SetOmapHeaderOp {
+    hobject_t oid;
+    bufferlist header_bl;
+    SetOmapHeaderOp(const hobject_t &oid, bufferlist &bl)
+      : oid(oid), header_bl(bl) {}
+  };
+  struct SetOmapClearOp {
+    hobject_t oid;
+    SetOmapClearOp(const hobject_t &oid) : oid(oid) {}
+  };
+
   struct NoOp {};
   typedef boost::variant<
     AppendOp,
@@ -107,6 +138,10 @@ public:
     SetAttrsOp,
     RmAttrOp,
     AllocHintOp,
+    SetOmapsOp,
+    RmOmapsOp,
+    SetOmapHeaderOp,
+    SetOmapClearOp,
     NoOp> Op;
   list<Op> ops;
   uint64_t written;
@@ -223,6 +258,41 @@ public:
   void nop() {
     ops.push_back(NoOp());
   }
+
+  void omap_setkeys(
+    const hobject_t &hoid,
+    map<string, bufferlist> &keys) {
+    for (map<string, bufferlist>::iterator p = keys.begin(); p != keys.end(); ++p)
+      written += p->first.length() + p->second.length();
+    ops.push_back(SetOmapsOp(hoid, keys));
+  }
+  void omap_setkeys(
+    const hobject_t &hoid,
+    bufferlist &keys_bl) {
+    written += keys_bl.length();
+    ops.push_back(SetOmapsOp(hoid, keys_bl));
+  }
+  void omap_rmkeys(
+    const hobject_t &hoid,
+    set<string> &keys) {
+    ops.push_back(RmOmapsOp(hoid, keys));
+  }
+  void omap_rmkeys(
+    const hobject_t &hoid,
+    bufferlist &keys_bl) {
+    ops.push_back(RmOmapsOp(hoid, keys_bl));
+  }
+  void omap_clear(
+    const hobject_t &hoid) {
+    ops.push_back(SetOmapClearOp(hoid));
+  }
+  void omap_setheader(
+    const hobject_t &hoid,
+    bufferlist &header) {
+    written += header.length();
+    ops.push_back(SetOmapHeaderOp(hoid, header));
+  }
+
   bool empty() const {
     return ops.empty();
   }
