@@ -2888,7 +2888,13 @@ int ECBackend::objects_read_sync(
   uint32_t op_flags,
   bufferlist *bl)
 {
-  return -EOPNOTSUPP;
+  // only cls call can call sync_read
+  assert(op_flags & CEPH_OSD_OP_FLAG_CLS);
+  int r = store->read(
+    ch,
+    ghobject_t(hoid, ghobject_t::NO_GEN, get_parent()->whoami_shard().shard),
+    off, len, *bl, op_flags);
+  return r;
 }
 
 struct CallClientContexts :

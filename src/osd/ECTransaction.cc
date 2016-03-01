@@ -139,6 +139,7 @@ struct TransGenerator : public boost::static_visitor<void> {
   void operator()(const ECTransaction::AppendOp &op) {
     uint64_t offset = op.off;
     bufferlist bl(op.bl);
+    bool is_cls = op.fadvise_flags & CEPH_OSD_OP_FLAG_CLS;
     assert(bl.length());
     assert(offset % sinfo.get_stripe_width() == 0);
     map<int, bufferlist> buffers;
@@ -146,14 +147,23 @@ struct TransGenerator : public boost::static_visitor<void> {
     assert(hash_infos.count(op.oid));
     ECUtil::HashInfoRef hinfo = hash_infos[op.oid];
 
-    // align
-    if (bl.length() % sinfo.get_stripe_width())
-      bl.append_zero(
-	sinfo.get_stripe_width() -
-	((offset + bl.length()) % sinfo.get_stripe_width()));
-    assert(bl.length() - op.bl.length() < sinfo.get_stripe_width());
-    int r = ECUtil::encode(
-      sinfo, ecimpl, bl, want, &buffers);
+    int r = 0;
+    if (is_cls) {
+      for (set<int>::iterator i = want.begin();
+           i != want.end();
+           ++i) {
+        buffers[*i].append(bl);
+      }
+    } else {
+      // align
+      if (bl.length() % sinfo.get_stripe_width())
+        bl.append_zero(
+          sinfo.get_stripe_width() -
+          ((offset + bl.length()) % sinfo.get_stripe_width()));
+      assert(bl.length() - op.bl.length() < sinfo.get_stripe_width());
+      ECUtil::encode(
+        sinfo, ecimpl, bl, want, &buffers);
+    }
 
     hinfo->append(
       sinfo.aligned_logical_offset_to_chunk_offset(op.off),

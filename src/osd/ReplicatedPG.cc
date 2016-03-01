@@ -4029,7 +4029,32 @@ int ReplicatedPG::do_osd_ops(OpContext *ctx, vector<OSDOp>& ops)
 
     case CEPH_OSD_OP_SYNC_READ:
       if (pool.info.require_rollback()) {
-	result = -EOPNOTSUPP;
+        int r = pgbackend->objects_read_sync(
+          soid, op.extent.offset, op.extent.length, op.flags, &osd_op.outdata);
+        if (r >= 0)
+          op.extent.length = r;
+        else {
+          result = r;
+          op.extent.length = 0;
+        }
+        dout(10) << " read got " << r << " / " << op.extent.length
+                 << " bytes from obj " << soid << dendl;
+
+        // whole object?  can we verify the checksum?
+        // if (op.extent.length == oi.size && oi.is_data_digest()) {
+        //   uint32_t crc = osd_op.outdata.crc32c(-1);
+        //   if (oi.data_digest != crc) {
+        //     osd->clog->error() << info.pgid << std::hex
+        //      << " full-object read crc 0x" << crc
+        //      << " != expected 0x" << oi.data_digest
+        //      << std::dec << " on " << soid;
+        //     // FIXME fall back to replica or something?
+        //     result = -EIO;
+        //   }
+        // }
+
+        ctx->delta_stats.num_rd_kb += SHIFT_ROUND_UP(op.extent.length, 10);
+        ctx->delta_stats.num_rd++;
 	break;
       }
       // fall through

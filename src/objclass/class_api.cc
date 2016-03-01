@@ -250,6 +250,7 @@ int cls_cxx_read(cls_method_context_t hctx, int ofs, int len, bufferlist *outbl)
   ops[0].op.op = CEPH_OSD_OP_SYNC_READ;
   ops[0].op.extent.offset = ofs;
   ops[0].op.extent.length = len;
+  ops[0].op.flags = CEPH_OSD_OP_FLAG_CLS;
   ret = (*pctx)->pg->do_osd_ops(*pctx, ops);
   if (ret < 0)
     return ret;
@@ -265,6 +266,7 @@ int cls_cxx_write(cls_method_context_t hctx, int ofs, int len, bufferlist *inbl)
   ops[0].op.extent.offset = ofs;
   ops[0].op.extent.length = len;
   ops[0].indata = *inbl;
+  ops[0].op.flags = CEPH_OSD_OP_FLAG_CLS;
   return (*pctx)->pg->do_osd_ops(*pctx, ops);
 }
 
