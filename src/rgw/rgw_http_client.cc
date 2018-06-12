@@ -51,6 +51,9 @@ struct rgw_http_req_data : public RefCountedObject {
 
   int wait() {
     Mutex::Locker l(lock);
+    if (done) {
+      return ret;
+    }
     cond.Wait(lock);
     return ret;
   }
