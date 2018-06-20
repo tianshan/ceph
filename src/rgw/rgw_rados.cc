@@ -3734,29 +3734,33 @@ void RGWRados::finalize()
 {
   cct->get_admin_socket()->unregister_commands(this);
 
-  if (async_rados) {
-    async_rados->stop();
-  }
   if (run_sync_thread) {
     Mutex::Locker l(meta_sync_thread_lock);
     meta_sync_processor_thread->stop();
-    delete meta_sync_processor_thread;
-    meta_sync_processor_thread = NULL;
 
     Mutex::Locker dl(data_sync_thread_lock);
     for (auto iter : data_sync_processor_threads) {
       RGWDataSyncProcessorThread *thread = iter.second;
       thread->stop();
+    }
+    if (sync_log_trimmer) {
+      sync_log_trimmer->stop();
+    }
+  }
+  if (async_rados) {
+    async_rados->stop();
+  }
+  if (run_sync_thread) {
+    delete meta_sync_processor_thread;
+    meta_sync_processor_thread = NULL;
+    Mutex::Locker dl(data_sync_thread_lock);
+    for (auto iter : data_sync_processor_threads) {
+      RGWDataSyncProcessorThread *thread = iter.second;
       delete thread;
     }
     data_sync_processor_threads.clear();
-
-    if (sync_log_trimmer) {
-      sync_log_trimmer->stop();
-      delete sync_log_trimmer;
-      sync_log_trimmer = nullptr;
-    }
-
+    delete sync_log_trimmer;
+    sync_log_trimmer = nullptr;
     bucket_trim = boost::none;
   }
   if (finisher) {
