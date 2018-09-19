@@ -180,6 +180,11 @@ bool JSONObj::is_array()
   return (data.type() == array_type);
 }
 
+bool JSONObj::is_null()
+{
+  return (data.type() == null_type);
+}
+
 vector<string> JSONObj::get_array_elements()
 {
   vector<string> elements;

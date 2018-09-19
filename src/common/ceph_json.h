@@ -75,6 +75,7 @@ public:
 
   bool is_array();
   bool is_object();
+  bool is_null();
   vector<string> get_array_elements();
 };
 
@@ -489,6 +490,11 @@ struct JSONFormattable {
         JSONObj *field = *iter;
         decode_json_obj(obj[field->get_name()], field);
       }
+    } else if (jo->is_null()) {
+      type = JSONFormattable::FMT_NONE;
+      str.clear();
+      arr.clear();
+      obj.clear();
     } else {
       type = JSONFormattable::FMT_STRING;
       decode_json_obj(str, jo);
